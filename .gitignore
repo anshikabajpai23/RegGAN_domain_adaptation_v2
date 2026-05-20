@@ -19,6 +19,6 @@ lib/
 lib64/
 parts/   
 .env  
-*.sh
+*slurm_files/
 runs/
 preprocessed_masks/
