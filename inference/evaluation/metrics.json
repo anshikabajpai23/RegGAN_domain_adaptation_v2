@@ -1,0 +1,14 @@
+{
+  "FID": 163.94311281149942,
+  "KID_mean": 0.020000000001253515,
+  "KID_std": 2.8462436855262044e-12,
+  "SSIM_DESS_FakePD": 0.35665715751477833,
+  "mean_deformation_magnitude": 0.02807537466287613,
+  "max_deformation_magnitude": 0.03366005793213844,
+  "jacobian_det_mean": 1.0000553131103516,
+  "jacobian_det_min": 0.7417653799057007,
+  "jacobian_det_max": 1.309045433998108,
+  "jacobian_folding_pct": 0.0,
+  "meniscus_mean_deformation": 0.05347277224063873,
+  "meniscus_max_deformation": 0.07375449687242508
+}

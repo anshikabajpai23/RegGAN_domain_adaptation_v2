@@ -8,3 +8,8 @@ Notes:
 - evaluate - Quantitative and qualitative analysis
 - preprocess_pd - only pd prprocessing - did not use it anywhere - (ignore)
 - preprocess - for input preprocessing
+
+Action items:
+- copy logs from bigred
+- run it for best checkpoint
+- analysis of metrics
