@@ -24,20 +24,20 @@
 
 ---
 
-## Stage 2 — Dataset / training-loop mechanical fixes
+## Stage 2 — Dataset / training-loop mechanical fixes  ✅ COMPLETE
 
-Contained fixes, no design decisions required. All should land before any retrain.
+Contained fixes, no design decisions required.
 
 | # | Bug | File | Status |
 |---|---|---|---|
-| 2a | Validation PD pairing uses `random.randint()` with no seed — non-reproducible val metric even when `aug=False` | `dataset.py:54` | ❌ Not fixed |
-| 2b | Checkpoint resume resets `global_step=0`, `best_val=inf` regardless of `self.start_epoch`; LR schedulers (`sched_G/D/R`) are not saved/restored at all | `train.py` `_save_checkpoint()`/`_load_checkpoint()`/`train()` | ❌ Not fixed |
-| 2c | Augmentation `TF.rotate(t, angle)` has no `fill` arg — torchvision defaults to `fill=0`, which is **mid-gray** in the `[-1,1]` normalization, not background. Rotated corners get gray artifacts baked into training data | `dataset.py` `_augment()` | ❌ Not fixed |
-| 2d | Train/inference architecture defaults mismatch: `train.py` defaults `ngf=48, n_res=6`; `infer2.py` defaults `ngf=64, n_res=9`. Not yet triggered because actual SLURM jobs pass explicit matching args, but a future run without explicit args will crash on `load_state_dict` | `train.py` vs `inference/infer2.py` argparse defaults | ❌ Not fixed |
+| 2a | Validation PD pairing uses `random.randint()` with no seed — non-reproducible val metric even when `aug=False` | `dataset.py` | ✅ **FIXED.** Val/test split now uses deterministic `idx % len(pd_paths)` pairing; train split keeps random cross-patient pairing (intentional). Verified synthetically: same index returns identical PD path across repeated calls. |
+| 2b | Checkpoint resume resets `global_step=0`, `best_val=inf` regardless of `self.start_epoch`; LR schedulers (`sched_G/D/R`) are not saved/restored at all | `train.py` `_save_checkpoint()`/`_load_checkpoint()`/`train()` | ✅ **FIXED & verified on real BigRed training run** (job `stage2_verify_7432661`). Schedulers now saved/restored via `state_dict()`, with a fast-forward fallback for older checkpoints. Evidence: `global_step` continued 4400→6600 across resume (not reset to 0), `best_val=0.4736` carried over (not `inf`), log explicitly printed `"Resumed from epoch 1 step 4400 best_val=0.47361599813614574"` with no `"No scheduler state in checkpoint"` fallback warning — confirms the scheduler `load_state_dict()` path was taken successfully. |
+| 2c | Augmentation `TF.rotate(t, angle)` has no `fill` arg — torchvision defaults to `fill=0`, which is **mid-gray** in the `[-1,1]` normalization, not background. Rotated corners get gray artifacts baked into training data | `dataset.py` `_augment()` | ✅ **FIXED.** Added `fill=-1.0`. Verified synthetically: rotated sample's corner fill value is `-0.97` (near background `-1`), not `0` (mid-gray). |
+| 2d | Train/inference architecture defaults mismatch: `train.py` defaults `ngf=48, n_res=6`; `infer2.py` defaults `ngf=64, n_res=9`. Not yet triggered because actual SLURM jobs pass explicit matching args, but a future run without explicit args will crash on `load_state_dict` | `train.py` vs `inference/infer2.py` argparse defaults | ✅ **FIXED.** Both now default to `ngf=48, n_res=9` (matching actual production config). Verified: both Phase 1 and Phase 2 of the BigRed verification run used these defaults successfully with no shape mismatch. |
 
-**Validation for this stage:**
-- Instantiate `UnpairedSliceDataset(split="val", aug=False)`, call `__getitem__` on the same index twice, confirm identical PD pairing both times
-- Save a dummy checkpoint mid-training, reload it, confirm `epoch`/`global_step`/scheduler `last_epoch` all continue correctly (not reset to 0)
+**Validation performed:**
+- 2a, 2c: synthetic local unit tests (dummy `.npy` files, no real dataset needed)
+- 2b, 2d: real BigRed training run — short training (2 epochs) → checkpoint → resume (1 more epoch) → confirmed via `.err` log grep and direct checkpoint inspection
 - Render one augmented training sample, visually confirm no gray-fill artifact at rotated corners
 - Print `train.py` and `infer2.py` argparse defaults side by side, confirm they match
 

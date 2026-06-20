@@ -114,7 +114,10 @@ if __name__ == "__main__":
     ap.add_argument("--ckpt",       required=True)
     ap.add_argument("--dess_root",  default="data/skm-tea-dataset/dess-files")
     ap.add_argument("--out_dir",    default="results/translated_pd")
-    ap.add_argument("--ngf",        type=int, default=64)
+    # Defaults MUST match train.py defaults exactly (load_state_dict requires
+    # identical architecture). If you trained with non-default --ngf/--n_res,
+    # pass the same values here explicitly.
+    ap.add_argument("--ngf",        type=int, default=48)
     ap.add_argument("--n_res",      type=int, default=9)
     ap.add_argument("--batch_size", type=int, default=8)
     args = ap.parse_args()

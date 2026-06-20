@@ -285,12 +285,17 @@ class RegGANTrainer:
             real_A = batch["dess"].to(self.device)
             real_B = batch["pd"].to(self.device)
             fake_B = self.G_AB(real_A)
-            l1s.append(self.crit_l1(fake_B, real_B).item())   # proxy metric
+            # NOTE: data is unpaired — real_B is a random PD slice, NOT the
+            # ground truth for this DESS. This L1 is a distribution-level proxy,
+            # NOT a paired reconstruction error. Checkpoint selection via this
+            # metric reflects roughly which epoch produces PD-like distribution,
+            # not pixel-level accuracy.
+            l1s.append(self.crit_l1(fake_B, real_B).item())
             if images is None:
                 images = (real_A, fake_B, real_B)
 
         mean_l1 = np.mean(l1s)
-        self.writer.add_scalar("val/L1_proxy", mean_l1, epoch)
+        self.writer.add_scalar("val/L1_unpaired_proxy", mean_l1, epoch)
 
         # Save sample grid (denorm from [-1,1] to [0,1])
         def denorm(t): return (t + 1) / 2
@@ -311,6 +316,7 @@ class RegGANTrainer:
         ckpt = {
             "epoch": epoch,
             "global_step": getattr(self, "_last_global_step", 0),
+            "best_val": getattr(self, "_best_val", float("inf")),
             "G_AB": self.G_AB.state_dict(),
             "G_BA": self.G_BA.state_dict(),
             "D_A":  self.D_A.state_dict(),
@@ -319,6 +325,9 @@ class RegGANTrainer:
             "opt_G": self.opt_G.state_dict(),
             "opt_D": self.opt_D.state_dict(),
             "opt_R": self.opt_R.state_dict(),
+            "sched_G": self.sched_G.state_dict(),
+            "sched_D": self.sched_D.state_dict(),
+            "sched_R": self.sched_R.state_dict(),
         }
         path = os.path.join(self.args.out_dir, f"ckpt_{tag}.pt")
         torch.save(ckpt, path)
@@ -334,15 +343,31 @@ class RegGANTrainer:
         self.opt_G.load_state_dict(ckpt["opt_G"])
         self.opt_D.load_state_dict(ckpt["opt_D"])
         self.opt_R.load_state_dict(ckpt["opt_R"])
-        self.start_epoch = ckpt["epoch"] + 1
-        log.info(f"Resumed from epoch {ckpt['epoch']} step {ckpt.get('global_step', 0)}: {path}")
+        # Schedulers were not saved in older checkpoints — fall back to
+        # fast-forwarding via .step() so the LR decay schedule still
+        # continues correctly from the resumed epoch instead of restarting.
+        resumed_epoch = ckpt["epoch"] + 1
+        if "sched_G" in ckpt:
+            self.sched_G.load_state_dict(ckpt["sched_G"])
+            self.sched_D.load_state_dict(ckpt["sched_D"])
+            self.sched_R.load_state_dict(ckpt["sched_R"])
+        else:
+            log.warning("  No scheduler state in checkpoint (older format) — "
+                        f"fast-forwarding LR schedule by {resumed_epoch} epochs")
+            for _ in range(resumed_epoch):
+                self.sched_G.step(); self.sched_D.step(); self.sched_R.step()
+        self.start_epoch = resumed_epoch
+        self._last_global_step = ckpt.get("global_step", 0)
+        self._best_val = ckpt.get("best_val", float("inf"))
+        log.info(f"Resumed from epoch {ckpt['epoch']} step {ckpt.get('global_step', 0)} "
+                 f"best_val={self._best_val}: {path}")
 
     # ── Main loop ────────────────────────────────────────────────────────────
 
     def train(self):
         args = self.args
-        global_step = 0
-        best_val = float("inf")
+        global_step = getattr(self, "_last_global_step", 0)
+        best_val = getattr(self, "_best_val", float("inf"))
 
         for epoch in range(self.start_epoch, args.epochs):
             self.G_AB.train(); self.G_BA.train()
@@ -377,9 +402,11 @@ class RegGANTrainer:
             log.info(f"  [val] L1 proxy = {val_l1:.4f}")
 
             # Checkpoint
+            self._best_val = best_val
             self._save_checkpoint(epoch, "latest")
             if val_l1 < best_val:
                 best_val = val_l1
+                self._best_val = best_val
                 self._save_checkpoint(epoch, "best")
 
         self.writer.close()
@@ -398,10 +425,13 @@ def get_args():
     ap.add_argument("--out_dir",     default="runs/reggan_001")
     ap.add_argument("--resume",      default=None, help="Path to checkpoint to resume from")
 
-    # Architecture
-    ap.add_argument("--ngf",   type=int, default=48,  help="Generator base filters (reduce for MPS: 48 or 32)")
+    # Architecture — defaults MUST match inference/infer2.py defaults exactly,
+    # since load_state_dict() requires identical architecture. Pass explicit
+    # smaller values (e.g. --ngf 32 --n_res 6) for local MPS testing instead
+    # of relying on the default.
+    ap.add_argument("--ngf",   type=int, default=48,  help="Generator base filters")
     ap.add_argument("--ndf",   type=int, default=48,  help="Discriminator base filters")
-    ap.add_argument("--n_res", type=int, default=6,   help="Residual blocks (reduce for MPS: 6)")
+    ap.add_argument("--n_res", type=int, default=9,   help="Residual blocks")
     ap.add_argument("--nf_reg",type=int, default=16,  help="Registration net base filters (keep small)")
 
     # Training

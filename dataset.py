@@ -26,6 +26,7 @@ class UnpairedSliceDataset(Dataset):
 
         self.dess_paths = splits["dess"][split]
         self.pd_paths   = splits["pd"][split]
+        self.split = split
         self.aug = aug and (split == "train")
 
         assert len(self.dess_paths) > 0, f"No DESS slices for split={split}"
@@ -46,12 +47,22 @@ class UnpairedSliceDataset(Dataset):
         if random.random() > 0.5:
             t = TF.vflip(t)
         angle = random.uniform(-10, 10)
-        t = TF.rotate(t, angle)
+        # fill=-1.0: background in [-1,1]-normalized space is -1, not the
+        # torchvision default of 0 (which is mid-gray here and would bake
+        # gray corner artifacts into rotated training samples)
+        t = TF.rotate(t, angle, fill=-1.0)
         return t
 
     def __getitem__(self, idx):
         d_path = self.dess_paths[idx % len(self.dess_paths)]
-        p_path = self.pd_paths[random.randint(0, len(self.pd_paths) - 1)]
+        if self.split == "train":
+            # train split: random cross-patient PD pairing is intentional
+            # (unpaired CycleGAN-style training)
+            p_path = self.pd_paths[random.randint(0, len(self.pd_paths) - 1)]
+        else:
+            # val/test split: deterministic pairing so the same metric value
+            # is reproducible across calls/epochs, not random noise
+            p_path = self.pd_paths[idx % len(self.pd_paths)]
 
         dess = self._load(d_path)
         pd   = self._load(p_path)
