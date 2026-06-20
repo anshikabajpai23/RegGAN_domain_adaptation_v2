@@ -1,0 +1,26 @@
+{
+  "dess": {
+    "modality": "dess",
+    "n_train_slices": 8800,
+    "n_val_slices": 1120,
+    "n_test_slices": 1120,
+    "n_train_patients": 55,
+    "n_val_patients": 7,
+    "n_test_patients": 7,
+    "train_val_overlap_patients": [],
+    "train_test_overlap_patients": [],
+    "val_test_overlap_patients": []
+  },
+  "pd": {
+    "modality": "pd",
+    "n_train_slices": 1804,
+    "n_val_slices": 243,
+    "n_test_slices": 224,
+    "n_train_patients": 55,
+    "n_val_patients": 7,
+    "n_test_patients": 7,
+    "train_val_overlap_patients": [],
+    "train_test_overlap_patients": [],
+    "val_test_overlap_patients": []
+  }
+}
