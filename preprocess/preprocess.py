@@ -155,13 +155,38 @@ def run_preprocessing(dess_root, pd_root, out_root, val_ratio=0.1, test_ratio=0.
         else:
             pd_slice_paths.extend(extract_slices(process_volume(vpath, "PD"), sdir, pid))
 
-    def split(paths, val_r, test_r):
-        tr, tmp = train_test_split(paths, test_size=val_r+test_r, random_state=42)
-        va, te  = train_test_split(tmp,   test_size=test_r/(val_r+test_r), random_state=42)
-        return tr, va, te
+    def patient_stem(slice_path):
+        """'MTR_005_Anonymized_..._sl0042.npy' -> 'MTR_005_Anonymized_...'"""
+        return Path(slice_path).stem.rsplit("_sl", 1)[0]
 
-    d_tr, d_val, d_te = split(dess_slice_paths, val_ratio, test_ratio)
-    p_tr, p_val, p_te = split(pd_slice_paths,   val_ratio, test_ratio)
+    def split_by_patient(paths, val_r, test_r, seed=42):
+        """
+        Group slices by patient/volume stem FIRST, then split PATIENTS
+        (not individual slices) into train/val/test. This guarantees no
+        patient's slices appear in more than one split — avoids the
+        leakage bug where slice-level splitting put the same patient's
+        slices in both train and val.
+        """
+        patient_slices = {}
+        for p in paths:
+            patient_slices.setdefault(patient_stem(p), []).append(p)
+        patients = sorted(patient_slices.keys())
+
+        n_patients = len(patients)
+        assert n_patients >= 3, (
+            f"Need at least 3 patients to split train/val/test, got {n_patients}"
+        )
+
+        tr_p, tmp_p = train_test_split(patients, test_size=val_r + test_r, random_state=seed)
+        va_p, te_p  = train_test_split(tmp_p,    test_size=test_r / (val_r + test_r), random_state=seed)
+
+        tr = [p for pid in tr_p for p in patient_slices[pid]]
+        va = [p for pid in va_p for p in patient_slices[pid]]
+        te = [p for pid in te_p for p in patient_slices[pid]]
+        return tr, va, te, set(tr_p), set(va_p), set(te_p)
+
+    d_tr, d_val, d_te, d_tr_p, d_val_p, d_te_p = split_by_patient(dess_slice_paths, val_ratio, test_ratio)
+    p_tr, p_val, p_te, p_tr_p, p_val_p, p_te_p = split_by_patient(pd_slice_paths,   val_ratio, test_ratio)
 
     splits = {"dess": {"train": d_tr, "val": d_val, "test": d_te},
               "pd":   {"train": p_tr, "val": p_val, "test": p_te}}
@@ -170,9 +195,32 @@ def run_preprocessing(dess_root, pd_root, out_root, val_ratio=0.1, test_ratio=0.
     with open(splits_path, "w") as f:
         json.dump(splits, f, indent=2)
 
-    log.info(f"DESS  train={len(d_tr)}  val={len(d_val)}  test={len(d_te)}")
-    log.info(f"PD    train={len(p_tr)}  val={len(p_val)}  test={len(p_te)}")
+    log.info(f"DESS  train={len(d_tr)} slices/{len(d_tr_p)} patients   "
+             f"val={len(d_val)} slices/{len(d_val_p)} patients   "
+             f"test={len(d_te)} slices/{len(d_te_p)} patients")
+    log.info(f"PD    train={len(p_tr)} slices/{len(p_tr_p)} patients   "
+             f"val={len(p_val)} slices/{len(p_val_p)} patients   "
+             f"test={len(p_te)} slices/{len(p_te_p)} patients")
     log.info(f"Splits -> {splits_path}")
+
+    # ── Built-in leakage verification ──────────────────────────────────────
+    log.info("Verifying no patient leakage across splits...")
+    problems = []
+    for name, tr_p, va_p, te_p in [("DESS", d_tr_p, d_val_p, d_te_p),
+                                    ("PD",   p_tr_p, p_val_p, p_te_p)]:
+        ov_tr_va = tr_p & va_p
+        ov_tr_te = tr_p & te_p
+        ov_va_te = va_p & te_p
+        if ov_tr_va or ov_tr_te or ov_va_te:
+            problems.append(f"{name}: train∩val={ov_tr_va} train∩test={ov_tr_te} val∩test={ov_va_te}")
+
+    if problems:
+        for p in problems:
+            log.error(f"  LEAKAGE DETECTED: {p}")
+        raise RuntimeError("Patient leakage detected across splits — aborting.")
+    else:
+        log.info("  OK: zero patient overlap between train/val/test for both DESS and PD.")
+
     return splits
 
 
