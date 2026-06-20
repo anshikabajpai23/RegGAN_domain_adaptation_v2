@@ -102,7 +102,13 @@ def frechet_distance(mu1, sigma1, mu2, sigma2):
 
 
 def compute_fid(fake_slices, real_slices):
-    log.info("Computing FID...")
+    # NOTE ON FID VALIDITY: this implementation uses 64x64 raw pixel features,
+    # NOT InceptionV3 features (no internet on HPC). The absolute FID value is
+    # non-standard and NOT comparable to published scores. The relative comparison
+    # (fake_PD vs real_PD) < (DESS vs real_PD baseline) is valid and shows the
+    # translation improves distributional similarity. State this limitation clearly
+    # in any writeup.
+    log.info("Computing FID (64x64 pixel features — non-standard, relative comparison only)...")
     fake_feats = compute_simple_features(slices_to_array(fake_slices)).astype(np.float64)
     real_feats = compute_simple_features(slices_to_array(real_slices)).astype(np.float64)
     mu_f, s_f  = fake_feats.mean(0), np.cov(fake_feats, rowvar=False)

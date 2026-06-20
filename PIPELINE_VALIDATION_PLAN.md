@@ -57,6 +57,16 @@ Contained fixes, no design decisions required.
 - Confirm train-time and eval-time R calls use the *same* domain pairing once redesigned
 - Re-run the no-warp mask overlay check (already done once manually) as the primary anatomy-preservation evidence, independent of R
 
+### Attempt 1 (reverted) — retarget R to `(fake_B, real_A)`
+
+Tried retargeting R's fixed image from random `real_B` to the true source `real_A` (in an isolated `train_stage3.py`, `train.py` never touched). Also dropped the raw-pixel `l_reg_sim` loss since `warped` (PD-contrast) vs `real_A` (DESS-contrast) pixel L1 isn't meaningful across the contrast gap.
+
+**Result (verified on a real BigRed training run, job `stage3_verify_7434020`):** R's flow collapsed to **exactly zero** (`mean=0.000000px`, `smooth=0.0000`, `mag=0.0000` on literally every logged step across 2 epochs) — worse than the original near-zero collapse. Root cause: with `l_reg_sim` removed, the only remaining losses (`l_smooth`, `l_mag`) are both uniquely minimized at `flow≡0` — there was nothing left in the loss function rewarding R for predicting anything else. This is a pure consequence of the loss design, not noisy data.
+
+**Status:** reverted. `train_stage3.py` restored to be byte-identical to `train.py` again — none of this attempt's changes are active anywhere. Stage 3 is back to "not started, root cause diagnosed."
+
+**Lesson for the next attempt:** any retargeting of R must keep *some* similarity-driving loss (rewarding R for finding/correcting real misalignment), not just the smoothness/magnitude regularizers. Likely direction: a contrast-invariant similarity loss (e.g. edge/gradient-magnitude L1 between `warped` and `real_A`, instead of raw pixel L1) — proposed but not yet implemented or tested.
+
 ---
 
 ## Stage 4 — Evaluation pipeline alignment fix
@@ -64,8 +74,13 @@ Contained fixes, no design decisions required.
 | # | Bug | File | Status |
 |---|---|---|---|
 | 4a | `dess_slices`, `fake_pd_slices`, `mask_slices` are loaded independently (different glob patterns, different file-naming schemes) and zipped **positionally** by index — no patient-ID cross-referencing. `mask_slices[i]` can belong to a different patient than `fake_pd_slices[i]` | `inference/evaluate.py` (slice loaders, `evaluate_deformation()`, `plot_meniscus_overlays()`, `plot_knee_boundary_overlay()`, `plot_difference_map()`) | ❌ Not fixed |
+| 4b | **NEW** — Neither `infer2.py` nor `evaluate.py` reference `splits.json` at all. `infer2.py` recursively globs and translates *every* DESS volume in `dess_root` (train+val+test all mixed, no filtering). `evaluate.py` takes raw `--fake_pd_dir`/`--dess_slice_dir`/`--mask_dir` paths with no split filtering either | `inference/infer2.py` (`run_inference`, glob at line 83-84), `inference/evaluate.py` (argparse, no `--split` concept anywhere) | ❌ Not fixed — found during train/val/eval alignment check |
 
-**Validation for this stage:** rebuild slice loading to key all three sources by patient stem, iterate only over the intersection of available patient IDs, zip within-patient by matching slice index. Re-run `evaluate.py`, spot-check that the meniscus mask used at index *i* belongs to the same patient as the fake PD slice at index *i*.
+**Why 4b matters:** all reported metrics (FID, deformation, meniscus) are very likely computed on a mix that includes patients the GAN was *trained* on, not held-out val/test patients. This is evaluating on training data and inflates apparent performance — directly relevant to "does everything align with train/val/eval," not just an evaluation-correctness nuance.
+
+**Validation for this stage:**
+- 4a: rebuild slice loading to key all three sources by patient stem, iterate only over the intersection of available patient IDs, zip within-patient by matching slice index. Re-run `evaluate.py`, spot-check that the meniscus mask used at index *i* belongs to the same patient as the fake PD slice at index *i*.
+- 4b: add `--split` filtering to both `infer2.py` (only translate val/test DESS patients for evaluation purposes, or tag outputs by split) and `evaluate.py` (only evaluate metrics on the held-out split) — confirmed via direct code inspection, no script written yet.
 
 ---
 
@@ -79,6 +94,18 @@ Contained fixes, no design decisions required.
 **Validation for this stage:**
 - `scripts/check_spacing.py` (written, already run once — confirmed mismatch)
 - `scripts/resample_to_pd_spacing.py` (written, not yet run) — apply, then re-run `check_spacing.py` on the resampled output to confirm match to real PD spacing
+
+### Stage 5c — Reverse-preprocessing / round-trip verification (for long-term inference goal)
+
+Checked whether converting pseudo-PD slices back to NIfTI, and converting predicted segmentation masks on real PD back to NIfTI, loses information or misaligns with the original volumes.
+
+| Finding | Detail | Status |
+|---|---|---|
+| Real PD preprocessing is a spatial no-op | Verified numerically: native PD shape (384×384) already equals `TARGET_SIZE`, and native in-plane spacing (0.39mm both dims) is already isotropic — so `process_volume()` triggers **neither** the resample nor the resize step for PD. Only intensity normalization happens. | ✅ **Good news, no fix needed** — converting a predicted mask back to NIfTI for a real PD scan just needs the original PD affine reattached, no inverse-resize math required |
+| DESS preprocessing is NOT a spatial no-op | Verified numerically: native DESS shape (512×512) does trigger a real resize to 384×384 (scale factor 0.75, cubic interpolation) — effective in-plane spacing becomes `0.31/0.75 = 0.413mm`, vs real PD's native `0.39mm` (~6% mismatch) | ⚠️ Reinforces Stage 5a — pseudo-PD must be resampled to real PD's *exact* native spacing (not just through-plane) before segmentation training, or the model trains at a different effective resolution than it'll see at real-PD inference time |
+| No script existed to reconstruct a volume from saved `.npy` slices, handling background slices that `extract_slices()` skips (`mean < 0.02`) | `extract_slices()` preserves the *original* slice index in the filename (`sl{i:04d}`, not a renumbered count) even when slices are skipped — confirmed reconstruction is mechanically possible, just not implemented anywhere | ✅ **Written and verified**: `scripts/reconstruct_volume_from_slices.py`. Synthetic test (20-slice volume, 4 intentionally-skipped background slices) confirmed: skipped indices detected exactly, non-skipped slices reconstructed exactly, gaps correctly filled rather than silently compacted |
+
+**Why this matters for the 3-phase goal:** the long-term goal is fine-tune on pseudo-PD → infer on real unlabeled PD → get usable segmentation masks back in NIfTI form. This confirms the *real PD* side of that round-trip is clean (no resampling to invert), and surfaces that the *pseudo-PD* side needs Stage 5a's spacing fix to target real PD's *exact* spacing (both in-plane and through-plane) for the round-trip to be consistent end-to-end. The reconstruction script is a new prerequisite tool for Stage 8 (turning per-slice segmentation predictions back into a usable NIfTI volume).
 
 ---
 
@@ -114,6 +141,10 @@ This produces the first **trustworthy** checkpoint and metric set in the project
 - Stage 7 (must use the retrained, valid checkpoint — not `run_002`/`run_003`)
 
 **This stage cannot be run meaningfully before Stage 7 completes.** Running it earlier would train on mismatched masks, wrong spacing, and an invalid generator checkpoint — any result would be uninterpretable.
+
+**New prerequisite found:** `preprocess_masks.py` only produces whole-volume mask NIfTIs (for visualization/evaluation) — it has **no slice-extraction step** analogous to `preprocess.py`'s `extract_slices()` for images. There is currently no mechanism producing paired `(image_slice.npy, mask_slice.npy)` training data at the slice level. This needs to be built as part of Stage 8, not assumed to already exist.
+
+**Reconstruction tooling ready:** `scripts/reconstruct_volume_from_slices.py` (built during Stage 5c) supports `--mask_mode` for `int16` label-preserving reconstruction — verified synthetically that integer labels survive exactly (no float casting/interpolation). This will be used to convert Stage 8's per-slice segmentation predictions on real PD back into a usable NIfTI volume.
 
 **Validation:** Dice/boundary distance on any labeled real PD scans (if available) or visual inspection of predicted masks on real PD; compare segmentation trained on fake-PD vs DESS-direct as a sanity baseline.
 
