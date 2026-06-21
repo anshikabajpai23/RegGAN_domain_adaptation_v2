@@ -36,13 +36,35 @@ TARGET_SIZE = (384, 384)
 
 
 def reorient_to_ras_mask(nifti_path):
-    """Reorient mask to RAS+. Returns (int16 array (R,A,S), spacing)."""
-    img = sitk.ReadImage(nifti_path)
-    img = sitk.DICOMOrient(img, "RAS")
-    arr = sitk.GetArrayFromImage(img)    # (S, A, R)
-    arr = np.transpose(arr, (2, 1, 0))  # -> (R, A, S)
-    sp  = img.GetSpacing()              # (sp_R, sp_A, sp_S)
-    return arr.astype(np.int16), sp
+    """
+    Reorient mask to RAS+. Returns (int16 array (R,A,S), spacing).
+
+    REGRESSION FIX: SimpleITK refuses to load NIfTIs with non-orthonormal
+    direction cosines ("ITK only supports orthonormal direction cosines").
+    This previously-documented issue (see CLAUDE.md "Key Bugs Fixed #5")
+    affects ~22/69 masks. The fallback to nibabel.as_closest_canonical()
+    was documented but missing from this file -- restoring it here.
+    nibabel's as_closest_canonical() doesn't require strict orthonormality
+    and returns an array already in RAS axis order (R, A, S), matching the
+    SimpleITK path's output convention after its transpose.
+    """
+    try:
+        img = sitk.ReadImage(nifti_path)
+        img = sitk.DICOMOrient(img, "RAS")
+        arr = sitk.GetArrayFromImage(img)    # (S, A, R)
+        arr = np.transpose(arr, (2, 1, 0))  # -> (R, A, S)
+        sp  = img.GetSpacing()              # (sp_R, sp_A, sp_S)
+        return arr.astype(np.int16), sp
+    except RuntimeError as e:
+        if "orthonormal" not in str(e):
+            raise
+        log.warning(f"  SimpleITK rejected non-orthonormal affine, "
+                     f"falling back to nibabel.as_closest_canonical(): {nifti_path}")
+        nii   = nib.load(nifti_path)
+        canon = nib.as_closest_canonical(nii)
+        arr   = np.asarray(canon.get_fdata()).astype(np.int16)  # already (R, A, S)
+        sp    = tuple(float(z) for z in canon.header.get_zooms()[:3])
+        return arr, sp
 
 
 def process_mask(mask_path):
@@ -138,7 +160,15 @@ def run(mask_root, dess_root, out_root, pd_dir=None):
             affine, zooms = get_pd_affine(pd_dir, stem)
 
         if affine is None:
-            # Fallback: compute from DESS spacing
+            # Fallback: compute from DESS spacing.
+            # STAGE 5b SYNC FIX: this used to build a plain
+            # np.diag([sp_R, eff_sp_A, eff_sp_S, 1.0]) affine -- zero origin,
+            # assumed-identity direction. infer2.py's get_effective_affine()
+            # was fixed in Stage 5b to use the source image's REAL direction
+            # matrix and origin instead. This fallback was a separate,
+            # duplicated copy of the old logic that never got the same fix --
+            # mirroring it here now so masks stay consistent with fake-PD
+            # output even when --pd_dir isn't available/matched.
             try:
                 img      = sitk.ReadImage(dess_path)
                 img      = sitk.DICOMOrient(img, "RAS")
@@ -154,7 +184,14 @@ def run(mask_root, dess_root, out_root, pd_dir=None):
                 n_S_rs    = round(n_S_orig * sp_S / target_ip)
                 eff_sp_A  = target_ip * n_A_rs / 384
                 eff_sp_S  = target_ip * n_S_rs / 384
-                affine    = np.diag([sp_R, eff_sp_A, eff_sp_S, 1.0]).astype(np.float32)
+
+                direction = np.array(img.GetDirection()).reshape(3, 3)
+                origin    = np.array(img.GetOrigin())
+
+                affine = np.eye(4, dtype=np.float64)
+                affine[:3, :3] = direction @ np.diag([sp_R, eff_sp_A, eff_sp_S])
+                affine[:3, 3]  = origin
+                affine    = affine.astype(np.float32)
                 zooms     = (sp_R, eff_sp_A, eff_sp_S)
             except Exception as e:
                 log.warning(f"  SKIPPED {stem} (affine fallback failed): {e}")
