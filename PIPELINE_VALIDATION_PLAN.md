@@ -20,7 +20,9 @@
 - `scripts/check_mask_integrity.py` — written and run both locally (1 failure, local-only) and on BigRed (0 failures) — confirms 1b resolved
 - 1c confirmed resolved by direct count on BigRed (69/69)
 
-**Stage 1 is now fully complete (1a, 1b, 1c all resolved).**
+**Re-validated against freshly regenerated masks (`preprocessed_v2/masks`):** running `preprocess_masks.py` from scratch surfaced a real **regression** — 22/69 masks failed with `"ITK only supports orthonormal direction cosines"`. This exactly matches a previously-documented, previously-fixed issue (CLAUDE.md "Key Bugs Fixed #5"), whose nibabel fallback had gone missing from the current `reorient_to_ras_mask()`. Restored the fallback (`nib.as_closest_canonical()` when SimpleITK rejects non-orthonormal affines), re-ran, and re-validated 1b/1c against the new output. **Confirmed 1b and 1c complete on the regenerated masks.**
+
+**Stage 1 is now fully complete (1a, 1b, 1c all resolved and re-validated on the current, regenerated masks — not stale/old data).**
 
 ---
 
@@ -67,20 +69,35 @@ Tried retargeting R's fixed image from random `real_B` to the true source `real_
 
 **Lesson for the next attempt:** any retargeting of R must keep *some* similarity-driving loss (rewarding R for finding/correcting real misalignment), not just the smoothness/magnitude regularizers. Likely direction: a contrast-invariant similarity loss (e.g. edge/gradient-magnitude L1 between `warped` and `real_A`, instead of raw pixel L1) — proposed but not yet implemented or tested.
 
+### Decision: deferred, proceeding with original R-network logic
+
+**2026-06-20 — user decision:** leave Stage 3 unresolved for now. Proceed to Stage 7 (retrain) using `train.py` exactly as it stands today (Stage 1+2 fixes applied, original `R(fake_B, real_B)` + `l_reg_sim` logic unchanged — this is the same logic that has shipped since the project's original `run_002`/`run_003` checkpoints).
+
+**What this means for interpreting Stage 7's results:** the theoretical concern from 3a/3b (R trained on inconsistent cross-patient targets, evaluated on a pairing it never saw) still applies to whatever Stage 7 produces. However, the empirical check from the reverted Attempt 1 (`stage3_verify_7434734`, with the *original* logic) showed R does **not** collapse to literal zero — it produced a small, consistent, non-degenerate flow (`mean=0.0226px`) even on an out-of-distribution pairing. So the original logic is not catastrophically broken, just not rigorously validated as measuring genuine registration. Treat Stage 7's deformation/meniscus numbers as informative but not fully trustworthy until Stage 3 is revisited.
+
+**Stage 3 remains open for future work** — revisit with the edge-magnitude similarity loss approach if/when there's time to do it properly.
+
 ---
 
 ## Stage 4 — Evaluation pipeline alignment fix
 
 | # | Bug | File | Status |
 |---|---|---|---|
-| 4a | `dess_slices`, `fake_pd_slices`, `mask_slices` are loaded independently (different glob patterns, different file-naming schemes) and zipped **positionally** by index — no patient-ID cross-referencing. `mask_slices[i]` can belong to a different patient than `fake_pd_slices[i]` | `inference/evaluate.py` (slice loaders, `evaluate_deformation()`, `plot_meniscus_overlays()`, `plot_knee_boundary_overlay()`, `plot_difference_map()`) | ❌ Not fixed |
-| 4b | **NEW** — Neither `infer2.py` nor `evaluate.py` reference `splits.json` at all. `infer2.py` recursively globs and translates *every* DESS volume in `dess_root` (train+val+test all mixed, no filtering). `evaluate.py` takes raw `--fake_pd_dir`/`--dess_slice_dir`/`--mask_dir` paths with no split filtering either | `inference/infer2.py` (`run_inference`, glob at line 83-84), `inference/evaluate.py` (argparse, no `--split` concept anywhere) | ❌ Not fixed — found during train/val/eval alignment check |
+| 4a | `dess_slices`, `fake_pd_slices`, `mask_slices` are loaded independently (different glob patterns, different file-naming schemes) and zipped **positionally** by index — no patient-ID cross-referencing. `mask_slices[i]` can belong to a different patient than `fake_pd_slices[i]` | `inference/evaluate.py` (slice loaders, `evaluate_deformation()`, `plot_meniscus_overlays()`, `plot_knee_boundary_overlay()`, `plot_difference_map()`) | ✅ **Code fix applied.** Added `extract_patient_id()` helper + rewrote the loading section in `main()` to key all three sources by patient ID, intersect available patients, and zip within-patient by matching slice index. Syntax-checked locally. **Real-data validation deferred** — see note below. |
+| 4b | Neither `infer2.py` nor `evaluate.py` reference `splits.json` at all. `infer2.py` recursively globs and translates *every* DESS volume in `dess_root` (train+val+test all mixed, no filtering). `evaluate.py` takes raw `--fake_pd_dir`/`--dess_slice_dir`/`--mask_dir` paths with no split filtering either | `inference/infer2.py` (`run_inference`), `inference/evaluate.py` (argparse) | ✅ **Code fix applied.** Added `--splits`/`--split` args to both. `infer2.py`: `get_split_patient_stems()` reads `splits.json`, filters whole-volume DESS NIfTIs by full patient stem before translating. `evaluate.py`: filters `common_patients` (from the Stage 4a fix) against the chosen split's patient IDs (via `extract_patient_id()`, reused from 4a — confirmed consistent short-ID matching with a standalone test). Both args optional — omitting them preserves old behavior (no filtering) with an explicit warning logged. Syntax-checked locally. |
 
 **Why 4b matters:** all reported metrics (FID, deformation, meniscus) are very likely computed on a mix that includes patients the GAN was *trained* on, not held-out val/test patients. This is evaluating on training data and inflates apparent performance — directly relevant to "does everything align with train/val/eval," not just an evaluation-correctness nuance.
 
 **Validation for this stage:**
-- 4a: rebuild slice loading to key all three sources by patient stem, iterate only over the intersection of available patient IDs, zip within-patient by matching slice index. Re-run `evaluate.py`, spot-check that the meniscus mask used at index *i* belongs to the same patient as the fake PD slice at index *i*.
-- 4b: add `--split` filtering to both `infer2.py` (only translate val/test DESS patients for evaluation purposes, or tag outputs by split) and `evaluate.py` (only evaluate metrics on the held-out split) — confirmed via direct code inspection, no script written yet.
+- 4a: rebuild slice loading to key all three sources by patient stem, iterate only over the intersection of available patient IDs, zip within-patient by matching slice index. **Code fix applied and syntax-checked locally** (`inference/evaluate.py`).
+- 4b: add `--split` filtering to both `infer2.py` and `evaluate.py`. **Code fix applied, syntax-checked, patient-ID extraction consistency verified locally with a standalone test** (`MTR_005_Anonymized_2378615199_e1_sl0086.npy` → `MTR_005`, matching the short ID scheme masks use).
+
+**✅ REAL-DATA VALIDATION COMPLETE (job `stage4_evaluate_7441595`, run against the interim Stage 7 checkpoint + freshly regenerated `preprocessed_v2/masks`):**
+- 4b confirmed in both `infer2.py` (`"Filtered to --split=val: 69 -> 7 volumes"`) and `evaluate.py` (`"Filtered to --split=val: 7 -> 7 patients"`) logs — split filtering active and consistent in both places
+- 4a confirmed structurally: `"Patients: 69 DESS, 7 fake PD, 69 masks -> 7 usable in common"` — intersection logic correctly narrows to only patients present in all three sources, instead of naively zipping mismatched lists
+- 4a confirmed visually: `meniscus_overlays/` output inspected (and cross-checked in 3D Slicer with the regenerated `MTR_005` mask + translated PD volume) — boundaries land on correct anatomy, user-confirmed "looks fine"
+
+**Stage 4 (4a + 4b) is now fully validated on real data, not just syntax-checked.**
 
 ---
 
@@ -88,12 +105,14 @@ Tried retargeting R's fixed image from random `real_B` to the true source `real_
 
 | # | Bug | File | Status |
 |---|---|---|---|
-| 5a | Fake PD output inherits **DESS** through-plane spacing (0.80mm) instead of matching **real PD** (3.60mm) — confirmed numerically via `check_spacing.py` on actual local NIfTI files | `inference/infer2.py` `get_effective_spacing()` | ❌ Not fixed — diagnostic confirmed, fix script written, not yet applied |
-| 5b | Diagonal affine (`np.diag([sp_R, sp_A, sp_S, 1.0])`) preserves spacing magnitude only, not the full world-orientation matrix | `inference/infer2.py` | ❌ Not fixed — lower impact, only matters for scanner-space visualization |
+| 5a | Fake PD output inherits **DESS** through-plane spacing (0.80mm) instead of matching **real PD** (3.60mm) — confirmed numerically via `check_spacing.py` on actual local NIfTI files | `inference/infer2.py` `get_effective_spacing()`, `scripts/resample_to_pd_spacing.py` | ✅ **FIXED & verified on real BigRed data (job `stage5a_resample`).** Ran against the interim Stage 7 checkpoint's fake PD output per user decision (not waiting for final retrain). Found and fixed two real bugs along the way: (1) `get_mean_spacing()` read raw native spacing without RAS reorientation, comparing mismatched physical axes; (2) real PD has heterogeneous native acquisition resolutions (384×384@0.39mm vs 768×768@0.18-0.21mm) — averaging raw spacing across these produced a meaningless target. Fixed by reusing the same effective-spacing formula already proven correct elsewhere (`preprocess.py`/`infer2.py`'s reorient→isotropic-resample→divide-by-384), applied to real PD, using median over 15 files for robustness. Also fixed the same axis-order bug in `check_spacing.py`'s real-PD reading and summary comparison (was averaging raw native spacing against fake PD's effective spacing — apples vs oranges). **Final verified result: `RATIO (real_PD / fake_PD): R: 1.00x A: 1.00x S: 1.00x` — exact match on all axes, no mismatch.** |
+| 5b | Diagonal affine (`np.diag([sp_R, sp_A, sp_S, 1.0])`) preserves spacing magnitude only, zeroes out origin, assumes pure-identity direction | `inference/infer2.py`, `scripts/resample_to_pd_spacing.py` | ✅ **Code fix applied in both files.** `infer2.py`'s `get_effective_affine()` and `resample_to_pd_spacing.py`'s resample loops now build the affine from the source's actual `direction` matrix and `origin` instead of a zero-origin diagonal. |
+| 5b-2 | **NEW — LPS/RAS coordinate convention bug.** SimpleITK reports `GetDirection()`/`GetOrigin()` in LPS (DICOM convention) regardless of `DICOMOrient(img,"RAS")` array-labeling. Copying these directly into a `nibabel` affine (which expects RAS+ per the NIfTI standard) silently flipped left-right/anterior-posterior — caught via visual inspection in 3D Slicer (anatomy appeared mirrored). | `inference/infer2.py` `get_effective_affine()`, `preprocess/preprocess_masks.py` fallback affine | ✅ **Fixed and verified on real data.** Standard LPS→RAS conversion applied (`diag([-1,-1,1]) @ direction`, same flip on origin) in both files. **Verified**: affine diagonal changed from `[-3.60, -0.42, +0.42]` (two negative — the bug signature) to `[+3.60, +0.42, +0.42]` (all positive — correct RAS+ pattern) on the re-generated `MTR_005` output. Origin's first two components correctly flipped sign as expected from the conversion. Spacing ratio remains `1.00x` on all axes (unaffected, confirming this was purely an orientation fix, not a magnitude regression). |
 
-**Validation for this stage:**
-- `scripts/check_spacing.py` (written, already run once — confirmed mismatch)
-- `scripts/resample_to_pd_spacing.py` (written, not yet run) — apply, then re-run `check_spacing.py` on the resampled output to confirm match to real PD spacing
+**Validation for this stage — complete, on real data:**
+- `scripts/check_spacing.py` — run multiple times, bugs found and fixed along the way, final run confirms 1.00x match on all axes
+- `scripts/resample_to_pd_spacing.py` — run against real BigRed data, two real bugs found and fixed (axis-order + heterogeneous-resolution averaging), final output verified correct
+- Visual/Slicer cross-check performed on `MTR_005` (fake PD + mask) — confirmed no distortion after the fix (was visibly blocky/warped before)
 
 ### Stage 5c — Reverse-preprocessing / round-trip verification (for long-term inference goal)
 

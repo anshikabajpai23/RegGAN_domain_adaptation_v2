@@ -188,6 +188,17 @@ def run(mask_root, dess_root, out_root, pd_dir=None):
                 direction = np.array(img.GetDirection()).reshape(3, 3)
                 origin    = np.array(img.GetOrigin())
 
+                # LPS -> RAS FIX (same bug/fix as infer2.py's
+                # get_effective_affine() -- see that function's docstring).
+                # SimpleITK reports direction/origin in LPS regardless of
+                # DICOMOrient("RAS"); nibabel's affine needs RAS+. Without
+                # this flip, masks built via this fallback path would be
+                # mirrored left-right/anterior-posterior relative to the
+                # fake-PD volume they're meant to overlay.
+                lps_to_ras = np.diag([-1.0, -1.0, 1.0])
+                direction  = lps_to_ras @ direction
+                origin     = lps_to_ras @ origin
+
                 affine = np.eye(4, dtype=np.float64)
                 affine[:3, :3] = direction @ np.diag([sp_R, eff_sp_A, eff_sp_S])
                 affine[:3, 3]  = origin

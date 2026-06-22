@@ -13,6 +13,7 @@ Changes from v1:
 """
 
 import os
+import re
 import glob
 import json
 import logging
@@ -70,6 +71,28 @@ def draw_boundary(mask_bin, color, ax, linewidth=2):
 
 def slices_to_array(slices):
     return np.stack(slices, axis=0)
+
+
+def extract_patient_id(filename):
+    """
+    STAGE 4a FIX: canonical patient ID extraction, used to key dess_slices,
+    fake_pd_slices, and mask_slices by patient before zipping them together
+    (previously they were concatenated independently and zipped purely by
+    list position, which silently misaligned different patients' slices).
+
+    Mask filenames use a SHORT stem ("MTR_005_mask.nii.gz") while DESS/fake-PD
+    filenames use the FULL stem ("MTR_005_Anonymized_2378615199_e1_..."), so
+    we extract the common leading patient code (e.g. "MTR_005") from both.
+    Falls back to stripping known suffixes for other naming schemes.
+    """
+    base = os.path.basename(filename)
+    m = re.match(r"(MTR_\d+)", base)
+    if m:
+        return m.group(1)
+    for suf in ["_sl", "_pd_translated", "_mask"]:
+        if suf in base:
+            return base.split(suf)[0]
+    return os.path.splitext(os.path.splitext(base)[0])[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -597,22 +620,83 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info(f"Using device: {device}")
 
-    # ── Load DESS slices ─────────────────────────────────────────────────────
-    log.info("Loading DESS slices...")
-    dess_npys   = sorted(glob.glob(os.path.join(args.dess_slice_dir, "*.npy")))
-    dess_slices = [np.load(f) for f in dess_npys[:args.max_slices]]
-    log.info(f"  DESS: {len(dess_slices)} slices")
+    # ── Load DESS / fake-PD / masks — PATIENT-ALIGNED (Stage 4a fix) ──────────
+    # Previously these three were each concatenated independently (different
+    # glob patterns, different file-naming schemes) and zipped together by
+    # raw list position. That silently misaligned different patients' slices
+    # since patient counts/per-patient slice counts differ across sources.
+    # Now: key everything by patient ID first, only use patients present in
+    # all required sources, and pair slices within each patient by the
+    # DESS slice's own index (fake-PD/mask volumes are full un-skipped
+    # volumes, so DESS slice index i maps directly to position i in them).
+    log.info("Loading DESS/fake-PD/mask slices (patient-aligned)...")
 
-    # ── Load fake PD ─────────────────────────────────────────────────────────
-    log.info("Loading fake PD slices...")
-    fake_pd_slices = []
+    dess_by_patient = {}  # pid -> {slice_idx: npy_path}
+    for f in sorted(glob.glob(os.path.join(args.dess_slice_dir, "*.npy"))):
+        m = re.search(r"_sl(\d{4})\.npy$", os.path.basename(f))
+        if not m:
+            continue
+        idx = int(m.group(1))
+        pid = extract_patient_id(f)
+        dess_by_patient.setdefault(pid, {})[idx] = f
+
+    fake_pd_path_by_patient = {}  # pid -> nifti path
     for f in sorted(glob.glob(os.path.join(args.fake_pd_dir, "*.nii.gz"))):
-        fake_pd_slices.extend(load_slices_from_nifti(f))
-        if len(fake_pd_slices) >= args.max_slices: break
-    fake_pd_slices = fake_pd_slices[:args.max_slices]
+        fake_pd_path_by_patient[extract_patient_id(f)] = f
+
+    mask_path_by_patient = {}  # pid -> nifti path
+    if args.mask_dir and os.path.exists(args.mask_dir):
+        for f in sorted(glob.glob(os.path.join(args.mask_dir, "*.nii.gz"))):
+            mask_path_by_patient[extract_patient_id(f)] = f
+
+    common_patients = sorted(set(dess_by_patient) & set(fake_pd_path_by_patient))
+    if args.mask_dir:
+        common_patients = sorted(set(common_patients) & set(mask_path_by_patient))
+
+    if args.splits and args.split:
+        with open(args.splits) as f:
+            splits_json = json.load(f)
+        split_pids = set(extract_patient_id(p) for p in splits_json["dess"][args.split])
+        before = len(common_patients)
+        common_patients = sorted(set(common_patients) & split_pids)
+        log.info(f"  Filtered to --split={args.split}: {before} -> {len(common_patients)} patients "
+                 f"({len(split_pids)} patient IDs in this split)")
+    else:
+        log.warning("  No --splits/--split given — evaluating on ALL available patients "
+                    "(may include train-set patients). Pass --splits/--split to restrict "
+                    "to a held-out split.")
+
+    log.info(f"  Patients: {len(dess_by_patient)} DESS, {len(fake_pd_path_by_patient)} fake PD, "
+             f"{len(mask_path_by_patient)} masks -> {len(common_patients)} usable in common")
+
+    dess_slices, fake_pd_slices = [], []
+    mask_slices = [] if args.mask_dir else None
+    for pid in common_patients:
+        fake_vol = load_slices_from_nifti(fake_pd_path_by_patient[pid])
+        mask_vol = load_slices_from_nifti(mask_path_by_patient[pid]) if args.mask_dir else None
+        for idx in sorted(dess_by_patient[pid].keys()):
+            if idx >= len(fake_vol):
+                continue  # DESS slice index out of range for this patient's fake-PD volume depth
+            if mask_vol is not None and idx >= len(mask_vol):
+                continue  # same guard for mask volume depth
+            dess_slices.append(np.load(dess_by_patient[pid][idx]))
+            fake_pd_slices.append(fake_vol[idx])
+            if mask_vol is not None:
+                mask_slices.append(mask_vol[idx])
+            if len(dess_slices) >= args.max_slices:
+                break
+        if len(dess_slices) >= args.max_slices:
+            break
+
+    log.info(f"  DESS: {len(dess_slices)} slices")
     log.info(f"  Fake PD: {len(fake_pd_slices)} slices")
+    if mask_slices is not None:
+        log.info(f"  Masks: {len(mask_slices)} slices (patient+index aligned with DESS/fake PD above)")
 
     # ── Load real PD — preprocess same way as training ────────────────────────
+    # NOTE: real_pd_slices is intentionally NOT patient-aligned with the
+    # above — it's pooled for distribution-level metrics only (FID/KID),
+    # which don't require per-slice anatomical correspondence.
     log.info("Loading real PD slices (preprocessed)...")
     real_pd_slices = []
     for f in sorted(glob.glob(os.path.join(args.real_pd_dir, "**", "*.nii.gz"), recursive=True)):
@@ -624,21 +708,6 @@ def main(args):
         if len(real_pd_slices) >= args.max_slices: break
     real_pd_slices = real_pd_slices[:args.max_slices]
     log.info(f"  Real PD: {len(real_pd_slices)} slices")
-
-    # ── Load masks ────────────────────────────────────────────────────────────
-    mask_slices = None
-    if args.mask_dir and os.path.exists(args.mask_dir):
-        log.info("Loading masks...")
-        mask_slices = []
-        for f in sorted(glob.glob(os.path.join(args.mask_dir, "*.nii.gz"))):
-            try:
-                vol = nib.load(f).get_fdata(dtype=np.float32)
-                mask_slices.extend([vol[i] for i in range(vol.shape[0])])
-            except Exception as e:
-                log.warning(f"  Skipping mask {f}: {e}")
-            if len(mask_slices) >= args.max_slices: break
-        mask_slices = mask_slices[:len(dess_slices)]
-        log.info(f"  Masks: {len(mask_slices)} slices")
 
     # ── Load registration net ─────────────────────────────────────────────────
     R_net = None
@@ -746,5 +815,15 @@ if __name__ == "__main__":
     ap.add_argument("--n_res",          type=int,   default=9)
     ap.add_argument("--max_slices",     type=int,   default=500)
     ap.add_argument("--meniscus_label", type=int,   nargs="+", default=[5, 6])
+    # STAGE 4b: restrict evaluation to a held-out split. Without these, all
+    # available patients (which may include train-set patients) get evaluated,
+    # inflating apparent performance.
+    ap.add_argument("--splits", default=None,
+                     help="Path to splits.json (required with --split)")
+    ap.add_argument("--split",  default=None, choices=["train", "val", "test"],
+                     help="Only evaluate DESS patients in this split. Omit "
+                          "both --splits/--split for old behavior (no filtering).")
     args = ap.parse_args()
+    if bool(args.splits) != bool(args.split):
+        ap.error("--splits and --split must be given together")
     main(args)
