@@ -22,3 +22,5 @@ parts/
 *slurm_files/
 runs/
 preprocessed_masks/
+*.nii.gz
+slicer/

@@ -36,6 +36,7 @@ import os
 import sys
 
 import numpy as np
+from sklearn.decomposition import PCA
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from evaluate import (compute_simple_features, frechet_distance,
@@ -152,6 +153,27 @@ def main():
     dess_feats = compute_simple_features(slices_to_array(dess_slices)).astype(np.float64)
     fake_feats = compute_simple_features(slices_to_array(fake_slices)).astype(np.float64)
     real_feats = compute_simple_features(slices_to_array(real_slices)).astype(np.float64)
+
+    # PERFORMANCE FIX: raw features are 4096-dim (64x64 flattened). Each
+    # bootstrap/permutation resample calls frechet_distance() -> sqrtm() on
+    # the resulting 4096x4096 covariance matrix -- 2000 total calls
+    # (500 bootstrap x2 groups + 500 permutation x2 groups) on a matrix
+    # that's also rank-deficient (~500 samples, 4096 dims), which is both
+    # extremely slow (multi-hour) and numerically unstable. Fit PCA ONCE on
+    # the pooled features, reduce to a small well-conditioned dimensionality,
+    # then resample on that -- makes every sqrtm call near-instant.
+    n_pca = min(50, len(dess_feats) + len(fake_feats) + len(real_feats) - 1,
+                dess_feats.shape[1])
+    log.info(f"Reducing {dess_feats.shape[1]}-dim features to {n_pca}-dim via PCA "
+             f"(fit once on pooled DESS+fake+real features) before resampling...")
+    pca = PCA(n_components=n_pca, random_state=42)
+    pooled_all = np.concatenate([dess_feats, fake_feats, real_feats], axis=0)
+    pca.fit(pooled_all)
+    log.info(f"  PCA explained variance ratio (sum): {pca.explained_variance_ratio_.sum():.4f}")
+
+    dess_feats = pca.transform(dess_feats)
+    fake_feats = pca.transform(fake_feats)
+    real_feats = pca.transform(real_feats)
 
     log.info(f"Running bootstrap CI ({args.n_bootstrap} resamples)...")
     ci_fake = bootstrap_fid_ci(fake_feats, real_feats, args.n_bootstrap)
