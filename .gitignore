@@ -25,3 +25,5 @@ preprocessed_masks/
 *.nii.gz
 slicer/
 *.nrrd
+data/
+.DS_Store
