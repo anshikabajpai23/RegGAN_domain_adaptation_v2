@@ -7,6 +7,7 @@
 
 | File | What it does |
 |---|---|
+| `analysis_real_pd.ipynb` | Local analysis notebook — compares Baseline / V1 (55pt) / V2 (155pt) predictions against GT masks on 8 labeled real PD patients. Applies same preprocessing as pipeline (RAS reorient + 384×384 resize). Label mapping: baseline class 4 = meniscus, V1/V2 merge classes 1+2. Outputs `dice_comparison.png` and `visual_comparison.png` |
 | `models.py` | RegGAN architecture — Generator, PatchDiscriminator, RegistrationNet, and all loss functions (LSGAN, smoothness, magnitude) |
 | `dataset.py` | PyTorch Dataset for unpaired DESS/PD slice loading with augmentation (rotation, flip) — used by train.py |
 | `train.py` | Main training loop — G/D/R optimization, image pool, TensorBoard logging, checkpoint save/resume |

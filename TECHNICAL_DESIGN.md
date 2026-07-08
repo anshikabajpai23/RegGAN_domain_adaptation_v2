@@ -193,6 +193,24 @@ Run_002 inference on labeled PD patients uses `infer_labeled_pd.sh` — reads pa
 from `labeled_patients.txt` on BigRed, globs for matching NIfTI files in `pd-files/`,
 runs `infer_real_pd.py` with `run_002/ckpt_best.pth`.
 
+### Dice Evaluation vs Ground Truth — Label Mapping
+
+Ground truth masks (IU dataset, `segmentation_masks/*.nii`) use label `1 = meniscus`
+(single class, no lateral/medial split). Predictions use different schemes:
+
+| Model | Output classes | Meniscus extraction |
+|---|---|---|
+| Baseline (pitthexai original) | 5-class (0–4) | `pred == 4` (confirmed: class 4 = both menisci) |
+| V1 fine-tuned (run_001) | 3-class (0=bg, 1=lateral, 2=medial) | `pred > 0` (merge both) |
+| V2 fine-tuned (run_002) | 3-class (0=bg, 1=lateral, 2=medial) | `pred > 0` (merge both) |
+
+**GT preprocessing note:** Some IU PD patients have native 768×768 in-plane resolution
+(vs the more common 384×384). Predictions are always saved at 384×384 (the pipeline's
+working resolution). For Dice evaluation, GT masks are brought into the same 384×384
+space using the same pipeline steps as `process_volume()` — RAS reorientation via
+`nib.as_closest_canonical()`, then resize to 384×384 with `order=0` (nearest-neighbour
+to preserve integer labels). See `analysis_real_pd.ipynb` for implementation.
+
 ---
 
 ## 7. What's Verified vs. Still Open
@@ -213,6 +231,6 @@ runs `infer_real_pd.py` with `run_002/ckpt_best.pth`.
 | Fine-tuned segmentation accuracy — pilot (69 patients) | ✅ ~0.49 mean Dice (run_001) |
 | Fine-tuned segmentation accuracy — full (155 patients) | ✅ **0.8341 mean Dice** (run_002, epoch 15) |
 | Real PD inference — run_001 predictions | ✅ 8 patients, NIfTIs saved, viewed in Slicer |
-| Real PD inference — run_002 predictions on labeled patients | 🔄 In progress (infer_labeled_pd.sh submitted) |
-| Dice evaluation vs ground truth on labeled PD | ⏸ Pending (need ground truth masks + eval script) |
+| Real PD inference — run_002 predictions on labeled patients | ✅ 8 patients, NIfTIs copied locally |
+| Dice evaluation vs ground truth on labeled PD | 🔄 In progress (`analysis_real_pd.ipynb`, label mapping confirmed) |
 | Domain gap visualization (t-SNE + UMAP, all 155 patients) | 🔄 Pending (infer_all155 done, v3 plot not yet run) |
