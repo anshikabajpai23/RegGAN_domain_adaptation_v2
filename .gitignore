@@ -27,3 +27,4 @@ slicer/
 *.nrrd
 data/
 .DS_Store
+labeled_patients.txt
