@@ -193,6 +193,42 @@ Run_002 inference on labeled PD patients uses `infer_labeled_pd.sh` — reads pa
 from `labeled_patients.txt` on BigRed, globs for matching NIfTI files in `pd-files/`,
 runs `infer_real_pd.py` with `run_002/ckpt_best.pth`.
 
+---
+
+## 6b. Fine-Tuning Improvements — run_003
+
+### Motivation (from run_002 analysis)
+
+Training curves from run_002 showed:
+- Train and val loss track closely → **no overfitting** in the classical sense
+- The 0.83 val Dice → ~0.63 real PD Dice gap is **domain gap** (pseudo-PD ≠ real PD), not memorisation
+- Medial Dice was stuck until epoch 13 then jumped — model needs more epochs to converge fully
+- 20 epochs may be cutting off training early
+
+### Changes in run_003
+
+| | run_002 | run_003 |
+|---|---|---|
+| Loss | CrossEntropy only | **CE + Soft Dice** |
+| Train Dice logged | No | **Yes** |
+| Early stopping | No (fixed 20 epochs) | **Yes (patience=7, max 50 epochs)** |
+| Data | `segmentation_data_v2/` (same) | `segmentation_data_v2/` (same) |
+| Checkpoint | `run_002/ckpt_best.pth` | `run_003/ckpt_best.pth` |
+
+**Why CE + Soft Dice:**
+CrossEntropy treats every pixel equally — with ~95% background pixels, CE gets low loss just by predicting background everywhere. Soft Dice loss computes overlap directly (`2×|pred∩GT| / (|pred|+|GT|)`) and ignores background count — forces the model to find the meniscus, not just predict background. Background excluded from Dice loss (class 0 skipped) to avoid swamping the meniscus signal. Standard combination in medical segmentation, typically +3-5% Dice.
+
+**Why early stopping:**
+Prevents wasted compute and overfitting if val Dice plateaus. `patience=7` means training stops if no improvement for 7 consecutive epochs. `ckpt_best.pth` always saves the best epoch seen. `--epochs 50` gives enough headroom; early stopping decides the actual stop point.
+
+**Why train Dice logging:**
+Allows direct comparison of train vs val Dice to detect overfitting. Previously only val Dice was logged; train Dice was computed in `run_epoch()` but discarded.
+
+### run_003 result
+⏸ Pending (submitted via `finetune_run003.sh`)
+
+---
+
 ### Dice Evaluation vs Ground Truth — Label Mapping
 
 Ground truth masks (IU dataset, `segmentation_masks/*.nii`) use label `1 = meniscus`
@@ -230,7 +266,9 @@ to preserve integer labels). See `analysis_real_pd.ipynb` for implementation.
 | Fine-tuning pipeline mechanics | ✅ Verified |
 | Fine-tuned segmentation accuracy — pilot (69 patients) | ✅ ~0.49 mean Dice (run_001) |
 | Fine-tuned segmentation accuracy — full (155 patients) | ✅ **0.8341 mean Dice** (run_002, epoch 15) |
+| Fine-tuned segmentation accuracy — run_003 (CE+Dice, early stopping) | ⏸ Pending |
 | Real PD inference — run_001 predictions | ✅ 8 patients, NIfTIs saved, viewed in Slicer |
 | Real PD inference — run_002 predictions on labeled patients | ✅ 8 patients, NIfTIs copied locally |
+| Real PD inference — run_003 predictions | ⏸ Pending (after run_003 training completes) |
 | Dice evaluation vs ground truth on labeled PD | 🔄 In progress (`analysis_real_pd.ipynb`, label mapping confirmed) |
 | Domain gap visualization (t-SNE + UMAP, all 155 patients) | 🔄 Pending (infer_all155 done, v3 plot not yet run) |

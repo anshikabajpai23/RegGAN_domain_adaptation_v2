@@ -96,6 +96,8 @@
 | `infer_all155.sh` | Run infer2.py on all 155 DESS patients (full SKM-TEA) → fake_pd_all155/ |
 | `preprocess_all155.sh` | Run preprocess.py on full 155-patient SKM-TEA dataset → preprocessed_v3/ |
 | `infer_labeled_pd.sh` | Run infer_real_pd.py on specific PD patients listed in labeled_patients.txt → real_pd_predictions_v2/ |
+| `finetune_run003.sh` | Fine-tuning run_003 — CE + Soft Dice loss, early stopping (patience=7), 50 max epochs, train Dice logged. Reuses segmentation_data_v2/ (no prepare step needed) → segmentation_runs/run_003/ |
+| `infer_labeled_pd_run003.sh` | Run infer_real_pd.py with run_003/ckpt_best.pth on labeled PD patients → real_pd_predictions_run003/ |
 
 ---
 
@@ -131,6 +133,8 @@
 | `results/real_pd_predictions/` | Fine-tuned model predictions on 8 labeled PD scans (run_001) |
 | `results/real_pd_predictions_baseline/` | Baseline (non-fine-tuned) predictions on same 8 scans |
 | `results/real_pd_predictions_v2/` | Fine-tuned model predictions using run_002 checkpoint |
+| `results/real_pd_predictions_run003/` | Fine-tuned model predictions using run_003 checkpoint (CE+Dice, early stopping) ⏸ pending |
+| `segmentation_runs/run_003/` | run_003 checkpoints (CE+Dice loss, early stopping, train Dice logging) ⏸ pending |
 
 ---
 

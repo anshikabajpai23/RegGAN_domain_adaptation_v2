@@ -87,6 +87,30 @@ def dice_per_class(preds, targets, n_classes=N_CLASSES, eps=1e-6):
     return dices
 
 
+class SoftDiceLoss(nn.Module):
+    """
+    Differentiable Dice loss computed on softmax probabilities (not argmax),
+    so gradients flow through. Excludes background (class 0) — background
+    dominates voxel count and would swamp the meniscus signal.
+    """
+    def __init__(self, n_classes=N_CLASSES, eps=1e-6):
+        super().__init__()
+        self.n_classes = n_classes
+        self.eps = eps
+
+    def forward(self, logits, targets):
+        # logits: (B, C, H, W)   targets: (B, H, W) integer labels
+        probs = torch.softmax(logits, dim=1)
+        loss = 0.0
+        for c in range(1, self.n_classes):   # skip background (class 0)
+            p = probs[:, c]                  # (B, H, W) predicted prob for class c
+            t = (targets == c).float()       # (B, H, W) binary GT for class c
+            inter = (p * t).sum()
+            union = p.sum() + t.sum()
+            loss += 1.0 - (2.0 * inter + self.eps) / (union + self.eps)
+        return loss / (self.n_classes - 1)   # mean over foreground classes
+
+
 def run_epoch(model, loader, optimizer, loss_fn, device, train=True):
     model.train() if train else model.eval()
     total_loss = 0.0
@@ -131,6 +155,9 @@ def main():
                      help="Lower than from-scratch training (1e-4) -- fine-tuning "
                           "an already domain-relevant checkpoint")
     ap.add_argument("--num_workers", type=int, default=4)
+    ap.add_argument("--patience", type=int, default=7,
+                     help="Early stopping: stop if val meniscus Dice does not improve "
+                          "for this many epochs. Set to 0 to disable.")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -155,16 +182,27 @@ def main():
                              num_workers=args.num_workers)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    loss_fn = nn.CrossEntropyLoss()
+    ce_loss   = nn.CrossEntropyLoss()
+    dice_loss = SoftDiceLoss(n_classes=N_CLASSES)
+
+    def loss_fn(logits, targets):
+        return ce_loss(logits, targets) + dice_loss(logits, targets)
 
     best_val_dice = -1.0
+    epochs_no_improve = 0
+
     for epoch in range(args.epochs):
         train_loss, train_dices = run_epoch(model, train_loader, optimizer, loss_fn, device, train=True)
         val_loss, val_dices = run_epoch(model, val_loader, optimizer, loss_fn, device, train=False)
 
-        mean_meniscus_dice = (val_dices[1] + val_dices[2]) / 2  # exclude background
+        mean_train_dice = (train_dices[1] + train_dices[2]) / 2
+        mean_meniscus_dice = (val_dices[1] + val_dices[2]) / 2
         log.info(
-            f"Epoch {epoch:03d}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
+            f"Epoch {epoch:03d}  "
+            f"train_loss={train_loss:.4f}  "
+            f"train_dice[bg={train_dices[0]:.3f} lat={train_dices[1]:.3f} med={train_dices[2]:.3f}]  "
+            f"mean_train_meniscus_dice={mean_train_dice:.4f}  "
+            f"val_loss={val_loss:.4f}  "
             f"val_dice[bg={val_dices[0]:.3f} lat={val_dices[1]:.3f} med={val_dices[2]:.3f}]  "
             f"mean_meniscus_dice={mean_meniscus_dice:.4f}"
         )
@@ -172,8 +210,17 @@ def main():
         torch.save(model.state_dict(), os.path.join(args.out_dir, "ckpt_latest.pth"))
         if mean_meniscus_dice > best_val_dice:
             best_val_dice = mean_meniscus_dice
+            epochs_no_improve = 0
             torch.save(model.state_dict(), os.path.join(args.out_dir, "ckpt_best.pth"))
             log.info(f"  New best mean meniscus dice: {best_val_dice:.4f} -- saved ckpt_best.pth")
+        else:
+            epochs_no_improve += 1
+            log.info(f"  No improvement for {epochs_no_improve}/{args.patience} epochs")
+            if args.patience > 0 and epochs_no_improve >= args.patience:
+                log.info(f"  Early stopping triggered at epoch {epoch} "
+                         f"(no improvement for {args.patience} epochs). "
+                         f"Best val meniscus Dice: {best_val_dice:.4f}")
+                break
 
     log.info(f"Fine-tuning complete. Best mean meniscus dice: {best_val_dice:.4f}")
 
