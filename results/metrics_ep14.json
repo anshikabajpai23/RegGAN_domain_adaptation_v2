@@ -1,0 +1,16 @@
+{
+  "FID_fake_vs_real": 174.43835650402735,
+  "FID_dess_vs_real": 249.64411396034214,
+  "FID_improvement": 75.20575745631479,
+  "KID_mean": 0.019985148009089633,
+  "KID_std": 3.6538495592656655e-06,
+  "SSIM_DESS_FakePD": 0.3349513861625204,
+  "mean_deformation_magnitude": 0.031021302565932274,
+  "max_deformation_magnitude": 0.03768915683031082,
+  "jacobian_det_mean": 1.0001221895217896,
+  "jacobian_det_min": 0.6445280313491821,
+  "jacobian_det_max": 1.3506847620010376,
+  "jacobian_folding_pct": 0.0,
+  "meniscus_mean_deformation": 0.07451512664556503,
+  "meniscus_max_deformation": 0.09654378145933151
+}

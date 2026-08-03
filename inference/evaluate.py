@@ -650,7 +650,7 @@ def main(args):
             mask_path_by_patient[extract_patient_id(f)] = f
 
     common_patients = sorted(set(dess_by_patient) & set(fake_pd_path_by_patient))
-    if args.mask_dir:
+    if args.mask_dir and mask_path_by_patient:
         common_patients = sorted(set(common_patients) & set(mask_path_by_patient))
 
     if args.splits and args.split:
@@ -670,10 +670,10 @@ def main(args):
              f"{len(mask_path_by_patient)} masks -> {len(common_patients)} usable in common")
 
     dess_slices, fake_pd_slices = [], []
-    mask_slices = [] if args.mask_dir else None
+    mask_slices = [] if (args.mask_dir and mask_path_by_patient) else None
     for pid in common_patients:
         fake_vol = load_slices_from_nifti(fake_pd_path_by_patient[pid])
-        mask_vol = load_slices_from_nifti(mask_path_by_patient[pid]) if args.mask_dir else None
+        mask_vol = load_slices_from_nifti(mask_path_by_patient[pid]) if (args.mask_dir and pid in mask_path_by_patient) else None
         for idx in sorted(dess_by_patient[pid].keys()):
             if idx >= len(fake_vol):
                 continue  # DESS slice index out of range for this patient's fake-PD volume depth

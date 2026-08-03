@@ -90,6 +90,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tb_dir", required=True)
     ap.add_argument("--out_png", required=True)
+    ap.add_argument("--zoom_after", type=int, default=2000,
+                    help="Zoom panel shows only steps >= this value (default: 2000)")
     args = ap.parse_args()
 
     tags = {
@@ -99,28 +101,59 @@ def main():
         "R/mean_magnitude": "Registration flow magnitude",
     }
 
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-    axes = axes.flatten()
+    # 2 rows × 4 cols: top = full run, bottom = zoomed after --zoom_after
+    fig, axes = plt.subplots(2, 4, figsize=(24, 10))
+    run_name = os.path.basename(os.path.dirname(os.path.abspath(args.out_png)))
+    fig.suptitle(f"RegGAN Training Curves — {run_name}  "
+                 f"(bottom row: zoomed after step {args.zoom_after})",
+                 fontsize=13, fontweight="bold")
 
     print("=" * 70)
     print(" TRAINING CURVE ANALYSIS")
     print("=" * 70)
 
-    for ax, (tag, label) in zip(axes, tags.items()):
+    for col, (tag, label) in enumerate(tags.items()):
         steps, values = load_scalar(args.tb_dir, tag)
-        if steps is None:
-            ax.set_title(f"{label}\n(no data found for tag '{tag}')")
-            print(f"\n{label}: NO DATA found for tag '{tag}'")
-            continue
 
-        ax.plot(steps, values, linewidth=0.8)
-        ax.set_title(label, fontsize=11, fontweight="bold")
-        ax.set_xlabel("step" if "val/" not in tag else "epoch")
-        ax.set_ylabel("value")
-        ax.grid(alpha=0.3)
+        is_epoch_metric = "val/" in tag  # val L1 logged by epoch, not global step
 
-        print(f"\n{label} ({len(values)} points, last value={values[-1]:.5f}):")
-        print(f"  {trend_verdict(values, label)}")
+        for row in range(2):
+            ax = axes[row][col]
+            xlabel = "epoch" if is_epoch_metric else "step"
+
+            if steps is None:
+                ax.set_title(f"{label}\n(no data for '{tag}')")
+                continue
+
+            s, v = steps, values
+            if row == 1 and not is_epoch_metric:  # zoom only applies to step-based metrics
+                mask = s >= args.zoom_after
+                s, v = s[mask], v[mask]
+                if len(s) == 0:
+                    ax.set_title(f"{label}\n(no data after step {args.zoom_after})")
+                    continue
+
+            # smooth with rolling mean for readability
+            window = max(1, len(v) // 100)
+            v_smooth = np.convolve(v, np.ones(window) / window, mode="valid")
+            s_smooth = s[:len(v_smooth)]
+
+            ax.plot(s, v, alpha=0.2, linewidth=0.5, color="steelblue")
+            ax.plot(s_smooth, v_smooth, linewidth=1.8, color="steelblue")
+            if row == 0:
+                title = label
+            elif is_epoch_metric:
+                title = f"{label}\n(all epochs)"
+            else:
+                title = f"{label}\n(zoom ≥ {args.zoom_after})"
+            ax.set_title(title, fontsize=10, fontweight="bold")
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel("value")
+            ax.grid(alpha=0.3)
+
+        if steps is not None:
+            print(f"\n{label} ({len(values)} points, last={values[-1]:.5f}):")
+            print(f"  {trend_verdict(values, label)}")
 
     plt.tight_layout()
     os.makedirs(os.path.dirname(args.out_png), exist_ok=True)

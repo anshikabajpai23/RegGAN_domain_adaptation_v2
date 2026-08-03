@@ -328,6 +328,8 @@ class RegGANTrainer:
             "sched_G": self.sched_G.state_dict(),
             "sched_D": self.sched_D.state_dict(),
             "sched_R": self.sched_R.state_dict(),
+            "pool_fake_A": self.pool_fake_A.pool,
+            "pool_fake_B": self.pool_fake_B.pool,
         }
         path = os.path.join(self.args.out_dir, f"ckpt_{tag}.pt")
         torch.save(ckpt, path)
@@ -342,6 +344,9 @@ class RegGANTrainer:
         self.R.load_state_dict(ckpt["R"])
         self.opt_G.load_state_dict(ckpt["opt_G"])
         self.opt_D.load_state_dict(ckpt["opt_D"])
+        if "pool_fake_A" in ckpt:
+            self.pool_fake_A.pool = ckpt["pool_fake_A"]
+            self.pool_fake_B.pool = ckpt["pool_fake_B"]
         self.opt_R.load_state_dict(ckpt["opt_R"])
         # Schedulers were not saved in older checkpoints — fall back to
         # fast-forwarding via .step() so the LR decay schedule still
@@ -402,12 +407,15 @@ class RegGANTrainer:
             log.info(f"  [val] L1 proxy = {val_l1:.4f}")
 
             # Checkpoint
-            self._best_val = best_val
-            self._save_checkpoint(epoch, "latest")
-            if val_l1 < best_val:
+            is_best = val_l1 < best_val
+            if is_best:
                 best_val = val_l1
-                self._best_val = best_val
+            self._best_val = best_val  # always reflects true best before saving
+            self._save_checkpoint(epoch, "latest")
+            if is_best:
                 self._save_checkpoint(epoch, "best")
+            if (epoch + 1) % 5 == 0:
+                self._save_checkpoint(epoch, f"epoch_{epoch:03d}")
 
         self.writer.close()
         log.info("Training complete.")
