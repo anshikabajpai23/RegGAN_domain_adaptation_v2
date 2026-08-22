@@ -130,6 +130,14 @@ AC149BC218E75C   AC111633B463BB   AC13300201B926   AC12026D14291F   AC13637DA253
 | infer_v8_pseudoPD.sh | run_002_v2/ckpt_best.pth | real_pd_predictions_v8_pseudoPD | analysis_v8_17patients.ipynb |
 | infer_v8_mixed.sh | run_v7_mixed/ckpt_best.pth | real_pd_predictions_v8_mixed | analysis_v8_17patients.ipynb |
 
+### On Control cohort (20 patients) — iu-control/pd-files, first 20 alphabetically
+
+| Infer Script | Model Checkpoint | Output Dir | Analysis Notebook |
+|---|---|---|---|
+| infer_control_20pt.sh | run_v7_mixed/ckpt_best.pth | real_pd_predictions_control_20pt | TBD |
+
+> **Note:** No patient list file — script picks first 20 `.nii.gz` from `iu-control/pd-files` sorted alphabetically. Control cohort = separate from IU dataset used in training/eval; no GT masks available.
+
 ---
 
 ## 6. Key Differences Summary
@@ -147,7 +155,21 @@ AC149BC218E75C   AC111633B463BB   AC13300201B926   AC12026D14291F   AC13637DA253
 
 ---
 
-## 7. Key Rules
+## 7. Local GT Mask Paths
+
+| Cohort | Local Path | Format | # Files |
+|---|---|---|---|
+| D1 (10 eval patients) | `~/Desktop/AImed-lab/SEGMENTATIONS/PD-segmentations-final/` | `.seg.nrrd` | 10 |
+| New 7 eval patients | `segmentation_pd/segmentations/` (in repo) | `.seg.nrrd` | 7 |
+| D2 fine-tuning + others | `segmentation_pd/` root (in repo) | `.seg.nrrd` | 16 |
+
+> `segmentation_pd/segmentations/` = exactly the 7 new eval patients from labeled_patients_v8.txt
+> `segmentation_pd/` root = mix of D2 fine-tuning patients + some new eval patients (NOT all 17 eval)
+> D1 masks are NOT in the repo — they are at the AImed-lab path above
+
+---
+
+## 8. Key Rules
 
 - **D1 (labeled_patients.txt)** = hold-out eval only. NEVER in training.
 - **D2** = real PD patients with manual meniscus labels used for fine-tuning.
