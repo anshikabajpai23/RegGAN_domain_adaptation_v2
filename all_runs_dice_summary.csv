@@ -1,0 +1,11 @@
+Run,Label,Cohort,N patients,Mean Dice,Min Dice,Max Dice
+baseline_d1,Baseline (DESS),D1,10,0.0002,0.0,0.0014
+run_002_v2,Fake PD only (run_002_v2),D1,10,0.6952,0.6013,0.7449
+v5_realPD,v5 real PD only,D1,10,0.7693,0.7271,0.8231
+v5_mixed,v5 Mixed (syn+real),D1,10,0.7693,0.7271,0.8231
+v7_realPD,v7 Real PD only,D1,10,0.4757,0.37,0.5616
+v7_mixed,v7 Mixed (syn+real),D1,10,0.7772,0.7093,0.8094
+v8_baseline,v8 Baseline,17pt,17,0.0003,0.0,0.0028
+v8_pseudoPD,v8 Pseudo PD (run_002_v2),17pt,17,0.687,0.5577,0.7449
+v8_realPD,v8 Real PD only (v7_realPD ckpt),17pt,17,0.4756,0.37,0.5616
+v8_mixed,v8 Mixed (v7_mixed ckpt),17pt,17,0.7812,0.685,0.8428

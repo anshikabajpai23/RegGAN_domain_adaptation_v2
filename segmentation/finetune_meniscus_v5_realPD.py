@@ -111,7 +111,10 @@ def main():
                               os.path.join(args.data_root, "train", "masks"), augment=True)
     val_ds   = RealPDDataset(os.path.join(args.data_root, "val", "images"),
                               os.path.join(args.data_root, "val", "masks"), augment=False)
-    log.info(f"Train slices: {len(train_ds)}  Val slices: {len(val_ds)}")
+    train_scans = len({s.rsplit("_", 1)[0] for s in train_ds.slices})
+    val_scans   = len({s.rsplit("_", 1)[0] for s in val_ds.slices})
+    log.info(f"Train — {train_scans} scans, {len(train_ds)} slices  |  "
+             f"Val — {val_scans} scans, {len(val_ds)} slices")
 
     train_loader = DataLoader(train_ds, args.batch_size, shuffle=True,
                               num_workers=args.num_workers)

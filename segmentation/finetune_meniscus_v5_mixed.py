@@ -149,8 +149,14 @@ def main():
         os.path.join(args.real_data_root, "val",   "images"),
         os.path.join(args.real_data_root, "val",   "masks"), augment=False)
 
-    log.info(f"Fake PD — train: {len(fake_train)}  val: {len(fake_val)}")
-    log.info(f"Real PD — train: {len(real_train)}  val: {len(real_val)}")
+    fake_train_scans = len({pid for pid, _ in fake_train.items})
+    fake_val_scans   = len({pid for pid, _ in fake_val.items})
+    real_train_scans = len({s.rsplit("_", 1)[0] for s in real_train.slices})
+    real_val_scans   = len({s.rsplit("_", 1)[0] for s in real_val.slices})
+    log.info(f"Fake PD — train: {fake_train_scans} scans, {len(fake_train)} slices  |  "
+             f"val: {fake_val_scans} scans, {len(fake_val)} slices")
+    log.info(f"Real PD — train: {real_train_scans} scans, {len(real_train)} slices  |  "
+             f"val: {real_val_scans} scans, {len(real_val)} slices")
 
     fake_train_loader = DataLoader(fake_train, args.batch_size, shuffle=True,
                                    num_workers=args.num_workers)
