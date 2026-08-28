@@ -15,6 +15,7 @@ import sys
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import segmentation_models_pytorch as smp
 
@@ -48,21 +49,42 @@ def build_model(ckpt_path, device):
 
 
 class MergedLoss(nn.Module):
-    def __init__(self, w_bg=0.1, w_men=1.5, eps=1e-6):
+    """
+    Segmentation-restricted: CE is computed only over meniscus-labeled
+    pixels (background contributes zero CE gradient), matching the
+    ignore_index=0 restriction used in fake_loss_fn's CrossEntropyLoss.
+    Dice stays whole-image — it already penalises false-positive
+    meniscus predictions in the background via p_men.sum(), so dropping
+    the background CE term doesn't remove all pressure against them.
+    """
+    def __init__(self, w_men=1.5, eps=1e-6):
         super().__init__()
-        self.w_bg, self.w_men, self.eps = w_bg, w_men, eps
+        self.w_men, self.eps = w_men, eps
 
     def forward(self, logits, binary_masks):
         probs  = torch.softmax(logits, dim=1)
-        p_bg   = probs[:, 0]
         p_men  = probs[:, 1] + probs[:, 2]
         gt_men = (binary_masks > 0).float()
-        gt_bg  = (binary_masks == 0).float()
-        ce   = -(self.w_bg * gt_bg  * torch.log(p_bg.clamp(self.eps)) +
-                 self.w_men * gt_men * torch.log(p_men.clamp(self.eps))).mean()
+
+        ce_men = -self.w_men * gt_men * torch.log(p_men.clamp(self.eps))
+        ce     = ce_men.sum() / gt_men.sum().clamp(min=1.0)
+
         tp   = (p_men * gt_men).sum()
         dice = 1.0 - (2*tp + self.eps) / (p_men.sum() + gt_men.sum() + self.eps)
         return ce + dice
+
+
+def masked_ce_loss(logits, targets, weights):
+    """
+    CrossEntropyLoss(ignore_index=0) with reduction='mean' divides by the
+    count of non-background pixels, which returns NaN if a batch has zero
+    foreground pixels. Data prep already skips near-empty slices, but guard
+    against it here too, consistent with MergedLoss's masked-mean.
+    """
+    ce_per_px = F.cross_entropy(logits, targets, weight=weights,
+                                 ignore_index=0, reduction="none")
+    denom = (targets != 0).float().sum().clamp(min=1.0)
+    return ce_per_px.sum() / denom
 
 
 class SoftDiceLoss(nn.Module):
@@ -171,10 +193,14 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.epochs, eta_min=1e-8)
 
+    # ignore_index=0: segmentation-restricted CE — background pixels are
+    # excluded from the classification loss entirely (not just downweighted),
+    # matching MergedLoss's restriction on the real-PD side. class_weights[0]
+    # (background weight) is now unused since background is never scored.
     weights      = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
-    fake_loss_fn = lambda logits, y: (nn.CrossEntropyLoss(weight=weights)(logits, y) +
+    fake_loss_fn = lambda logits, y: (masked_ce_loss(logits, y, weights) +
                                       SoftDiceLoss()(logits, y))
-    merged_loss_fn = MergedLoss(w_bg=0.1, w_men=1.5)
+    merged_loss_fn = MergedLoss(w_men=1.5)
 
     best_val_dice, no_improve = -1.0, 0
     for epoch in range(args.epochs):

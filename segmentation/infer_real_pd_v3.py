@@ -106,10 +106,14 @@ def main():
     ap.add_argument("--encoder",    default="resnet34", choices=["resnet34", "resnet50"])
     ap.add_argument("--in_channels", type=int, default=3, choices=[3, 5])
     ap.add_argument("--batch_size", type=int, default=8)
+    ap.add_argument("--clip_percentile", type=float, default=None,
+                    help="If set, clip each slice to this percentile before inference (e.g. 95). "
+                         "Suppresses hyperintense tear fluid signal. Default: no clipping.")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log.info(f"Device: {device}  |  encoder: {args.encoder}  |  in_channels: {args.in_channels}")
+    log.info(f"Device: {device}  |  encoder: {args.encoder}  |  in_channels: {args.in_channels}  |  "
+             f"clip_percentile: {args.clip_percentile}")
 
     model = build_model(args.ckpt, args.encoder, args.in_channels, device)
     log.info(f"Loaded checkpoint from {args.ckpt}")
@@ -124,6 +128,10 @@ def main():
 
         log.info(f"Processing {fname} ...")
         vol = process_volume(path, "PD")
+        if args.clip_percentile is not None:
+            threshold = np.percentile(vol, args.clip_percentile)
+            vol = np.clip(vol, 0, threshold)
+            vol = vol / (threshold + 1e-8)  # renormalise to [0,1]
         preds = predict_volume(vol, model, device, args.in_channels, args.batch_size)
 
         n_meniscus = int((preds > 0).any(axis=(1, 2)).sum())
