@@ -1,16 +1,22 @@
 """
-finetune_meniscus_v10_boundary.py
-===================================
-v10: Same as v7_mixed (standard CE + Dice, DESS baseline, 15 real PD patients)
-     with one addition: a boundary-aware loss term.
+finetune_meniscus_v11_cldice.py
+================================
+v11: Same as v7_mixed (standard CE + Dice, DESS baseline, 15 real PD patients)
+     with one addition: a clDice (centerline Dice) loss term.
 
-Boundary loss: extra CE penalty computed only at the meniscus boundary pixels
-(thin ring around GT mask edge). Errors at the boundary are penalised more
-heavily than interior errors, directly targeting the fragmentation failure mode
-seen in torn meniscus patients.
+clDice penalises topologically incorrect predictions — disconnected islands and
+fragmented structures — by comparing the soft skeletons of the predicted and GT
+masks. Standard Dice does not distinguish between one connected meniscus and
+two equal-area fragments; clDice does.
 
-loss = standard_loss (CE + Dice) + lambda_boundary * boundary_loss
+Soft skeleton: iterative min-pooling (soft erosion) applied repeatedly to reduce
+a region to its approximate medial axis. Fully differentiable — no hard
+thresholds, so gradients flow through.
 
+loss = standard_loss (CE + Dice) + lambda_cldice * cl_dice_loss
+
+Reference: Shit et al. "clDice — a Novel Topology-Preserving Loss Function for
+Tubular Structure Segmentation" CVPR 2021.
 Baseline to beat: v7_mixed Dice=0.781 on 17pt cohort.
 """
 import argparse
@@ -49,7 +55,7 @@ def build_model(ckpt_path, device):
         stride=old_head.stride,
         padding=old_head.padding,
     )
-    log.info(f"Replaced head: {PRETRAINED_N_CLASSES} → {N_CLASSES} classes")
+    log.info(f"Replaced head: {PRETRAINED_N_CLASSES} -> {N_CLASSES} classes")
     return model.to(device)
 
 
@@ -71,25 +77,63 @@ class MergedLoss(nn.Module):
         return ce + dice
 
 
-def boundary_loss(logits, targets, eps=1e-6):
+def soft_erode(img, iters=3):
     """
-    Extra CE penalty at the meniscus boundary pixels only.
-    Boundary = GT meniscus mask minus its morphological erosion (3x3 kernel).
-    Divides by boundary pixel count so loss scale stays consistent.
+    Soft erosion via repeated min-pooling.
+    img: (B, 1, H, W) soft probability map in [0, 1]
+    Returns approximate soft skeleton (medial axis).
     """
-    probs     = torch.softmax(logits, dim=1)
-    p_men     = probs[:, 1] + probs[:, 2]          # (B, H, W)
-    gt_men    = (targets > 0).float()               # (B, H, W)
+    for _ in range(iters):
+        # 3x3 min-pool: each pixel takes the minimum of its 3x3 neighbourhood
+        img = -F.max_pool2d(-img, kernel_size=3, stride=1, padding=1)
+    return img
 
-    # erode GT mask: pixel is interior if all 3x3 neighbours are meniscus
-    kernel    = torch.ones(1, 1, 3, 3, device=targets.device)
-    gt_4d     = gt_men.unsqueeze(1)                 # (B,1,H,W)
-    eroded    = (F.conv2d(gt_4d, kernel, padding=1) == 9.0).squeeze(1).float()
-    boundary  = (gt_men - eroded).clamp(0, 1)       # (B, H, W)
 
-    ce_per_px = -torch.log(p_men.clamp(eps))        # CE for meniscus class
-    denom     = boundary.sum().clamp(min=1.0)
-    return (ce_per_px * boundary).sum() / denom
+def soft_skeleton(img, iters=10):
+    """
+    Soft skeleton via iterative erosion and residual accumulation.
+    img: (B, 1, H, W) in [0, 1]
+    """
+    skel = F.relu(img - soft_erode(img, iters=1))
+    for _ in range(iters - 1):
+        img  = soft_erode(img, iters=1)
+        skel = skel + F.relu(img - soft_erode(img, iters=1))
+    return skel
+
+
+def cldice_loss(logits, targets, iters=10, eps=1e-6):
+    """
+    clDice loss for the meniscus (foreground) channel.
+    Computes Dice on soft skeletons of pred and GT, then averages with
+    the standard soft Dice to get clDice.
+
+    logits:  (B, C, H, W)
+    targets: (B, H, W) integer labels
+    """
+    probs  = torch.softmax(logits, dim=1)
+    p_men  = (probs[:, 1] + probs[:, 2]).unsqueeze(1)   # (B,1,H,W)
+    gt_men = (targets > 0).float().unsqueeze(1)          # (B,1,H,W)
+
+    skel_pred = soft_skeleton(p_men,  iters=iters)
+    skel_gt   = soft_skeleton(gt_men, iters=iters)
+
+    # Topology precision: skeleton of pred overlaps GT body
+    tp_prec  = (skel_pred * gt_men).sum()
+    prec_den = skel_pred.sum() + gt_men.sum()
+    tprec    = (2 * tp_prec + eps) / (prec_den + eps)
+
+    # Topology recall: skeleton of GT overlaps pred body
+    tp_rec   = (p_men * skel_gt).sum()
+    rec_den  = p_men.sum() + skel_gt.sum()
+    trec     = (2 * tp_rec + eps) / (rec_den + eps)
+
+    cl_dice  = 1.0 - (tprec + trec) / 2.0
+
+    # Standard soft Dice on the meniscus channel
+    tp_dice  = (p_men * gt_men).sum()
+    std_dice = 1.0 - (2 * tp_dice + eps) / (p_men.sum() + gt_men.sum() + eps)
+
+    return (cl_dice + std_dice) / 2.0
 
 
 class SoftDiceLoss(nn.Module):
@@ -155,13 +199,19 @@ def main():
     ap.add_argument("--num_workers",      type=int,   default=4)
     ap.add_argument("--class_weights",    type=float, nargs=3,
                     default=[0.1, 1.5, 1.5])
-    ap.add_argument("--lambda_boundary",  type=float, default=1.0,
-                    help="Weight for boundary-aware loss term. Default: 1.0")
+    ap.add_argument("--lambda_cldice",    type=float, default=1.0,
+                    help="Weight for clDice topology loss term. Default: 1.0")
+    ap.add_argument("--skeleton_iters",   type=int,   default=10,
+                    help="Soft-skeleton erosion iterations. Default: 10")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log.info(f"Device: {device}  |  LR: {args.lr} → 1e-8  |  lambda_boundary: {args.lambda_boundary}  |  Data: mixed real+fake PD (DESS base)")
+    log.info(
+        f"Device: {device}  |  LR: {args.lr} -> 1e-8  |  "
+        f"lambda_cldice: {args.lambda_cldice}  |  skeleton_iters: {args.skeleton_iters}  |  "
+        f"Data: mixed real+fake PD (DESS base)"
+    )
 
     model = build_model(args.pretrained_ckpt, device)
 
@@ -182,9 +232,9 @@ def main():
     fake_val_scans   = len({pid for pid, _ in fake_val.items})
     real_train_scans = len({s.rsplit("_", 1)[0] for s in real_train.slices})
     real_val_scans   = len({s.rsplit("_", 1)[0] for s in real_val.slices})
-    log.info(f"Fake PD — train: {fake_train_scans} scans, {len(fake_train)} slices  |  "
+    log.info(f"Fake PD -- train: {fake_train_scans} scans, {len(fake_train)} slices  |  "
              f"val: {fake_val_scans} scans, {len(fake_val)} slices")
-    log.info(f"Real PD — train: {real_train_scans} scans, {len(real_train)} slices  |  "
+    log.info(f"Real PD -- train: {real_train_scans} scans, {len(real_train)} slices  |  "
              f"val: {real_val_scans} scans, {len(real_val)} slices")
 
     fake_train_loader = DataLoader(fake_train, args.batch_size, shuffle=True,
@@ -200,11 +250,12 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.epochs, eta_min=1e-8)
 
-    weights        = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
-    lam_b          = args.lambda_boundary
-    fake_loss_fn   = lambda logits, y: (nn.CrossEntropyLoss(weight=weights)(logits, y) +
-                                        SoftDiceLoss()(logits, y) +
-                                        lam_b * boundary_loss(logits, y))
+    weights      = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
+    lam_cl       = args.lambda_cldice
+    sk_iters     = args.skeleton_iters
+    fake_loss_fn = lambda logits, y: (nn.CrossEntropyLoss(weight=weights)(logits, y) +
+                                      SoftDiceLoss()(logits, y) +
+                                      lam_cl * cldice_loss(logits, y, iters=sk_iters))
     merged_loss_fn = MergedLoss(w_bg=0.1, w_men=1.5)
 
     best_val_dice, no_improve = -1.0, 0
