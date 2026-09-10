@@ -1,0 +1,3 @@
+patient,cohort,native_res,n_slices,n_gt_empty,n_halluc,halluc_px,halluc_dist,onslice_fp_px,fn_px,gt_px,dice,dice_on_sl,d_dice
+AC0CE315D5758B,real_val,768,30,16,5,1191,"1,1,1,2,2",983,543,4718,0.7545,0.8455,0.091
+AC0CEE9C24F2B7,real_val,768,32,16,4,810,"1,1,1,2",1389,1139,6163,0.7506,0.799,0.0483
