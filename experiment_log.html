@@ -1,0 +1,739 @@
+<title>RegGAN Experiment Log</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #F4F5F7;
+    --surface: #FFFFFF;
+    --surface-2: #EDEEF1;
+    --text: #1B1D27;
+    --text-2: #4A4F63;
+    --text-3: #8A8FA5;
+    --accent: #2A62C7;
+    --accent-lt: #EBF0FB;
+    --border: #DDE0E8;
+    --border-s: #B8BCCC;
+    --d-hi: #15803D; --d-hi-bg: #F0FDF4;
+    --d-mid: #B45309; --d-mid-bg: #FFFBEB;
+    --d-lo: #B91C1C; --d-lo-bg: #FEF2F2;
+    --mono-bg: #ECEEF2;
+    --nav-w: 214px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10121A;
+      --surface: #191C26;
+      --surface-2: #21242F;
+      --text: #E8EAF0;
+      --text-2: #8A90A8;
+      --text-3: #555A70;
+      --accent: #5B8FE8;
+      --accent-lt: #1A2440;
+      --border: #272B3A;
+      --border-s: #363B50;
+      --d-hi: #4ADE80; --d-hi-bg: #052E16;
+      --d-mid: #FCD34D; --d-mid-bg: #1C1400;
+      --d-lo: #F87171; --d-lo-bg: #1C0505;
+      --mono-bg: #1E2130;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10121A;
+    --surface: #191C26;
+    --surface-2: #21242F;
+    --text: #E8EAF0;
+    --text-2: #8A90A8;
+    --text-3: #555A70;
+    --accent: #5B8FE8;
+    --accent-lt: #1A2440;
+    --border: #272B3A;
+    --border-s: #363B50;
+    --d-hi: #4ADE80; --d-hi-bg: #052E16;
+    --d-mid: #FCD34D; --d-mid-bg: #1C1400;
+    --d-lo: #F87171; --d-lo-bg: #1C0505;
+    --mono-bg: #1E2130;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14.5px;
+    line-height: 1.65;
+  }
+
+  .layout { display: flex; min-height: 100vh; }
+
+  /* ── Side nav ── */
+  nav {
+    width: var(--nav-w);
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 0 32px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .nav-brand {
+    font-family: 'Libre Baskerville', Georgia, serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-3);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 0 18px 14px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 6px;
+  }
+
+  nav a {
+    display: block;
+    padding: 5px 18px;
+    font-size: 12.5px;
+    color: var(--text-2);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+    line-height: 1.4;
+  }
+  nav a:hover, nav a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    background: var(--accent-lt);
+  }
+
+  .nav-group { margin-top: 10px; }
+  .nav-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    padding: 6px 18px 2px;
+  }
+
+  /* ── Main ── */
+  main {
+    flex: 1;
+    min-width: 0;
+    padding: 48px 52px 88px;
+  }
+
+  /* ── Header ── */
+  .doc-header {
+    margin-bottom: 44px;
+    padding-bottom: 28px;
+    border-bottom: 2px solid var(--border-s);
+  }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text-3);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  h1 {
+    font-family: 'Libre Baskerville', Georgia, serif;
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--text);
+    text-wrap: balance;
+  }
+
+  .doc-meta {
+    margin-top: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+
+  .meta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--text-3);
+  }
+  .meta strong { color: var(--text-2); }
+
+  .dl-row { margin-top: 18px; }
+
+  button.dl {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 18px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.01em;
+  }
+  button.dl:hover { opacity: 0.88; }
+
+  /* ── Sections ── */
+  .section { margin-bottom: 56px; scroll-margin-top: 24px; }
+
+  h2 {
+    font-family: 'Libre Baskerville', Georgia, serif;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 16px;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin: 24px 0 10px;
+  }
+
+  p { color: var(--text-2); max-width: 66ch; margin-bottom: 10px; }
+
+  /* ── Tables ── */
+  .tbl { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 18px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    background: var(--surface);
+  }
+
+  thead th {
+    background: var(--surface-2);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    padding: 9px 13px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--accent-lt); }
+  td { padding: 8px 13px; color: var(--text); vertical-align: top; }
+
+  .mono { font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+
+  /* Dice badge */
+  .dice {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 9px;
+    border-radius: 20px;
+  }
+  .hi  { background: var(--d-hi-bg);  color: var(--d-hi); }
+  .mid { background: var(--d-mid-bg); color: var(--d-mid); }
+  .lo  { background: var(--d-lo-bg);  color: var(--d-lo); }
+  .na  { color: var(--text-3); font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+
+  /* Chip */
+  .chip {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 9px;
+  }
+  .chip-done { background: var(--d-hi-bg);  color: var(--d-hi); }
+  .chip-wip  { background: var(--d-mid-bg); color: var(--d-mid); }
+  .chip-plan { background: var(--surface-2); color: var(--text-3); }
+
+  /* Note/warn callouts */
+  .note, .warn {
+    padding: 10px 14px;
+    border-radius: 0 5px 5px 0;
+    font-size: 13px;
+    color: var(--text-2);
+    margin: 10px 0 18px;
+    max-width: 72ch;
+  }
+  .note { background: var(--accent-lt); border-left: 3px solid var(--accent); }
+  .warn { background: var(--d-lo-bg);   border-left: 3px solid var(--d-lo); }
+  .note strong, .warn strong { color: var(--text); }
+
+  /* Patient ID tags */
+  .pid-grid { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 14px; }
+  .pid {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    background: var(--mono-bg);
+    color: var(--text);
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  /* Lesson list */
+  ul.lessons { list-style: none; display: flex; flex-direction: column; gap: 5px; margin: 8px 0; }
+  ul.lessons li {
+    position: relative;
+    padding: 7px 12px 7px 34px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--text-2);
+    max-width: 70ch;
+  }
+  ul.lessons li::before {
+    content: '→';
+    position: absolute;
+    left: 12px;
+    color: var(--accent);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    background: var(--mono-bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  @media (max-width: 720px) {
+    nav { display: none; }
+    main { padding: 28px 18px 60px; }
+    h1 { font-size: 22px; }
+  }
+</style>
+
+<div class="layout">
+
+<nav id="sidenav">
+  <div class="nav-brand">RegGAN Log</div>
+  <div class="nav-group">
+    <div class="nav-label">Overview</div>
+    <a href="#translation">Translation Models</a>
+    <a href="#cohorts">Eval Cohorts</a>
+    <a href="#realpd">Real PD Data</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Seg Runs</div>
+    <a href="#s4a">4a — Fake PD only</a>
+    <a href="#s4b">4b — v3 Ablations</a>
+    <a href="#s4c">4c — v4 Real PD</a>
+    <a href="#s4d">4d — v5 Real PD</a>
+    <a href="#s4e">4e — v7 Mixed</a>
+    <a href="#s4f">4f — Phase 2 Infer</a>
+    <a href="#s4g">4g — Phase 2 Retrain</a>
+    <a href="#s12">v12 — New Ablations</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Reference</div>
+    <a href="#inference">Inference Table</a>
+    <a href="#summary">Key Differences</a>
+    <a href="#paths">GT Mask Paths</a>
+    <a href="#rules">Key Rules</a>
+  </div>
+</nav>
+
+<main>
+
+  <!-- Header -->
+  <div class="doc-header">
+    <div class="eyebrow">RegGAN Domain Adaptation · BigRed200</div>
+    <h1>Experiment Version Log</h1>
+    <div class="doc-meta">
+      <span class="meta"><strong>Updated</strong> 2026-08-31</span>
+      <span class="meta"><strong>BigRed base</strong> /N/project/prostate_cancer_ai/anshika/regGAN/</span>
+      <span class="meta"><strong>Local base</strong> ~/Desktop/github/RegGAN_domain_adaptation_v2/</span>
+    </div>
+    <div class="dl-row">
+      <button class="dl" onclick="downloadPage()">
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 10.5L3.5 6.5M7.5 10.5L11.5 6.5M7.5 10.5V1.5M2 13.5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Download HTML
+      </button>
+    </div>
+  </div>
+
+  <!-- 1. Translation Models -->
+  <div class="section" id="translation">
+    <h2>1. RegGAN Translation Models</h2>
+    <p>Three trained DESS→Fake PD RegGAN models. Old RegGAN is the one used in all segmentation runs unless stated.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Name</th><th>BigRed Path</th><th># DESS Pts</th><th># PD Pts</th><th>Epochs</th><th>FID</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Old RegGAN</td><td class="mono">segmentation_data_v2/</td><td>~69</td><td>~69</td><td>—</td><td class="dice mid">164.4</td><td>Used in all seg runs</td></tr>
+          <tr><td>New run006 ep14</td><td class="mono">fake_pd_run006_ep14/</td><td>155</td><td>155</td><td>14</td><td class="dice lo">174.4</td><td>Worse than old</td></tr>
+          <tr><td>New run006 ep52</td><td class="mono">fake_pd_run006_ep52/</td><td>155</td><td>155</td><td>52</td><td class="dice hi">147.6</td><td>Best FID overall</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Note:</strong> <code>segmentation_data_v2/</code> is the fake PD used in all fine-tuning runs unless explicitly noted otherwise.</div>
+  </div>
+
+  <!-- 2. Eval Cohorts -->
+  <div class="section" id="cohorts">
+    <h2>2. Evaluation Cohorts</h2>
+
+    <h3>D1 — Original Hold-out (10 patients) — NEVER used in training</h3>
+    <p>File: <code>labeled_patients.txt</code></p>
+    <div class="pid-grid">
+      <span class="pid">AC0D5A4D78B628</span><span class="pid">AC0D7BF72F7712</span><span class="pid">AC0D3459553205</span>
+      <span class="pid">AC14D3737C0482</span><span class="pid">AC19E7C19827FF</span><span class="pid">AC149BC218E75C</span>
+      <span class="pid">AC111633B463BB</span><span class="pid">AC13300201B926</span><span class="pid">AC12026D14291F</span>
+      <span class="pid">AC13637DA25399</span>
+    </div>
+    <p>GT masks (local): <code>~/Desktop/AImed-lab/SEGMENTATIONS/PD-segmentations-final/</code> (.seg.nrrd)</p>
+
+    <h3>D1+New — Extended Hold-out (17 patients) — v8 onward</h3>
+    <p>File: <code>labeled_patients_v8.txt</code> — D1 (10 above) plus 7 new patients:</p>
+    <div class="pid-grid">
+      <span class="pid">AC000550763509</span><span class="pid">AC005135D3495B</span><span class="pid">AC04433E37DB66</span>
+      <span class="pid">AC056ADCE8BE28</span><span class="pid">AC07607B9E5295</span><span class="pid">AC0D1A9818A6FC</span>
+      <span class="pid">AC0F11041F5180</span>
+    </div>
+    <p>New 7 GT masks (local): <code>~/Downloads/final-segmentations/</code> (.seg.nrrd)</p>
+    <div class="warn"><strong>Common mistake:</strong> Path is <code>~/Downloads/final-segmentations/</code> — NOT <code>~/Downloads/segmentations/</code> (does not exist). Wrong path causes 7 new patients to be silently skipped, inflating results to n=10.</div>
+  </div>
+
+  <!-- 3. Real PD Training -->
+  <div class="section" id="realpd">
+    <h2>3. Real PD Training Cohorts (D2)</h2>
+
+    <h3>real_pd_seg_data — v4, v5 (10 patients)</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Split</th><th># Patients</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Train</td><td>8</td><td>On BigRed in <code>labelled-pd/</code></td></tr>
+          <tr><td>Val</td><td>2</td><td class="mono">AC2B0AA9AE767D, AC2E254F52E467</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>real_pd_seg_data_v7 — v7+ (15 patients)</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Split</th><th># Patients</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Train</td><td>13</td><td>All 10 original D2 + AC0BA0AE159EF9, AC045F8F6ACBA7, AC0407F05FAF53</td></tr>
+          <tr><td>Val</td><td>2</td><td class="mono">AC0CE315D5758B, AC0CEE9C24F2B7</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>5 new masks added: AC0BA0AE159EF9, AC0CE315D5758B, AC0CEE9C24F2B7, AC045F8F6ACBA7, AC0407F05FAF53</p>
+  </div>
+
+  <!-- 4a -->
+  <div class="section" id="s4a">
+    <h2>4a. Fake PD Only (no real PD labels)</h2>
+    <p>All start from DESS baseline. Old RegGAN <code>segmentation_data_v2</code>. Eval on D1 (10pt).</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>Starting Ckpt</th><th>D1 Dice (10pt)</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>run_002</td><td class="mono">baseline</td><td><span class="dice mid">0.632</span></td><td>Early run</td></tr>
+          <tr><td>run_002_v2</td><td class="mono">baseline</td><td><span class="dice hi">0.695</span></td><td>Best fake-PD-only model</td></tr>
+          <tr><td>run_003</td><td class="mono">baseline</td><td><span class="dice mid">0.650</span></td><td>+ early stopping</td></tr>
+          <tr><td>run_005</td><td class="mono">baseline</td><td><span class="dice mid">0.640</span></td><td>New RegGAN ep52</td></tr>
+          <tr><td>run_ep14_v2</td><td class="mono">baseline</td><td><span class="dice lo">0.603</span></td><td>New RegGAN ep14</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 4b -->
+  <div class="section" id="s4b">
+    <h2>4b. v3 Ablations — Fake PD Only</h2>
+    <p>All start from DESS baseline, Old RegGAN <code>segmentation_data_v2</code>, no real PD. Eval on D1 (8pt subset). Reference Dice: run_002_v2 = 0.685.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>What changed</th><th>D1 Dice (8pt)</th><th>vs baseline</th></tr></thead>
+        <tbody>
+          <tr><td>run_v3_rotation</td><td>+rotation aug ±15°</td><td><span class="dice mid">0.676</span></td><td>−0.009</td></tr>
+          <tr><td>run_v3_tversky</td><td>Tversky loss (α=0.3, β=0.7)</td><td><span class="dice lo">0.656</span></td><td>−0.029</td></tr>
+          <tr><td>run_v3_elastic</td><td>+elastic deform aug</td><td><span class="dice lo">0.652</span></td><td>−0.033</td></tr>
+          <tr><td>run_v3_photometric</td><td>+photometric aug</td><td><span class="dice mid">0.681</span></td><td>−0.004</td></tr>
+          <tr><td>run_v3_resnet50</td><td>ResNet50 encoder</td><td><span class="dice lo">0.639</span></td><td>−0.046</td></tr>
+          <tr><td>run_v3_5slice</td><td>5-slice 2.5D context</td><td><span class="dice lo">0.486</span></td><td>−0.199</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Lesson:</strong> All v3 ablations used fake PD only — an unfair comparison for loss functions. v12 reruns Tversky and photometric on the full v7_mixed recipe to get a fair read.</div>
+  </div>
+
+  <!-- 4c -->
+  <div class="section" id="s4c">
+    <h2>4c. v4 — Real PD Fine-tuning, Starting from run_002_v2</h2>
+    <p>Starting checkpoint: <code>run_002_v2/ckpt_best.pth</code>. D2 real PD (10 patients). Eval on D1 (8pt).</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>Real PD</th><th>Fake PD</th><th>D1 Dice (8pt)</th></tr></thead>
+        <tbody>
+          <tr><td>run_v4_realPD</td><td>real_pd_seg_data (8 train, 2 val)</td><td>—</td><td><span class="dice hi">0.775</span></td></tr>
+          <tr><td>run_v4_mixed</td><td>real_pd_seg_data (8 train, 2 val)</td><td>segmentation_data_v2</td><td><span class="dice mid">0.759</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 4d -->
+  <div class="section" id="s4d">
+    <h2>4d. v5 — Real PD Fine-tuning, Starting from DESS Baseline</h2>
+    <p>Starting checkpoint: <code>baseline_best_model.pth</code>. D2 real PD (10 patients). Eval on D1 (8pt).</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>Real PD</th><th>Fake PD</th><th>D1 Dice (8pt)</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>run_v5_realPD</td><td>real_pd_seg_data</td><td>—</td><td><span class="dice lo">0.135</span></td><td>Collapsed — real PD alone not enough from scratch</td></tr>
+          <tr><td>run_v5_mixed</td><td>real_pd_seg_data</td><td>segmentation_data_v2</td><td><span class="dice hi">0.765</span></td><td>Best at the time</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 4e -->
+  <div class="section" id="s4e">
+    <h2>4e. v7 — Real PD Fine-tuning, 15 Patients</h2>
+    <p>Starting from DESS baseline. D2+aug3rd = 15 patients (13 train, 2 val). Eval on D1+New (17pt). <strong>Best overall run.</strong></p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>Real PD</th><th>Fake PD</th><th>Key change</th><th>D1+New Dice (17pt)</th></tr></thead>
+        <tbody>
+          <tr><td>run_v7_realPD</td><td>real_pd_seg_data_v7</td><td>—</td><td>15pt real, no fake</td><td><span class="dice hi">0.774</span></td></tr>
+          <tr><td><strong>run_v7_mixed</strong></td><td>real_pd_seg_data_v7</td><td>segmentation_data_v2</td><td>15pt real + fake</td><td><span class="dice hi">0.781</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>run_v7_mixed is the best checkpoint overall.</strong> Used as source for all Phase 2 inference experiments. LR=1e-5, class weights [0.1, 1.5, 1.5], 50 epochs, patience=10, cosine LR schedule.</div>
+  </div>
+
+  <!-- 4f -->
+  <div class="section" id="s4f">
+    <h2>4f. Phase 2 — Inference Experiments on v7_mixed</h2>
+    <p>No retraining. All use <code>run_v7_mixed/ckpt_best.pth</code>. Eval on D1+New (17pt). "v8" = naming convention for 17pt inference.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Label</th><th>What changed</th><th>D1+New Dice (17pt)</th><th>vs baseline</th></tr></thead>
+        <tbody>
+          <tr><td>v8_mixed</td><td>Baseline inference, no changes</td><td><span class="dice hi">0.781</span></td><td>—</td></tr>
+          <tr><td>v8_clipped (Exp A)</td><td>Input clipped to 95th percentile before inference — suppresses bright outlier pixels/coil artifacts, no retraining</td><td><span class="dice hi">0.784</span></td><td>+0.003</td></tr>
+          <tr><td>v8_filled (Exp B)</td><td>Post-processing: fill_holes + remove_small_objects on predictions</td><td><span class="dice hi">0.778</span></td><td>−0.003</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 4g -->
+  <div class="section" id="s4g">
+    <h2>4g. Phase 2 — Retraining Experiments</h2>
+    <p>All start from DESS baseline. Same data and hyperparams as v7_mixed (LR=1e-5, class weights [0.1, 1.5, 1.5], 50 epochs, patience=10) unless noted. Only the loss function changes.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>Key difference</th><th>Script</th><th>D1+New Dice (17pt)</th><th>vs 0.781</th><th>Win count</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>run_v9_mixed</td>
+            <td>Segmentation-restricted CE (background excluded from loss)</td>
+            <td class="mono">finetune_meniscus_v9_mixed.py</td>
+            <td><span class="dice mid">0.753</span></td>
+            <td>−0.028</td>
+            <td>0/17</td>
+          </tr>
+          <tr>
+            <td>run_v10_boundary</td>
+            <td>Standard CE + Dice + boundary-aware loss (λ=1.0) — extra CE penalty at 3×3 erosion ring of GT mask</td>
+            <td class="mono">finetune_meniscus_v10_boundary.py</td>
+            <td><span class="dice mid">0.753</span></td>
+            <td>−0.028</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>run_v11_cldice</td>
+            <td>Standard CE + Dice + clDice topology loss (λ=1.0, iters=10) — soft skeleton via iterative min-pooling</td>
+            <td class="mono">finetune_meniscus_v11_cldice.py</td>
+            <td><span class="dice hi">0.777</span></td>
+            <td>−0.004</td>
+            <td>7/17</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>v11_cldice note:</strong> Wins the most individual patients (7/17) despite a slight mean drop. The clDice topology loss helps on cases where v7_mixed undersegments. AC07607B9E5295 is an outlier — v10_boundary hurts it severely (−0.163).</div>
+    <div class="note"><strong>v9 lesson:</strong> Removing background from CE loss hurt — background context is needed for boundary discrimination. Do not retry without new insight.</div>
+  </div>
+
+  <!-- v12 -->
+  <div class="section" id="s12">
+    <h2>v12 — New Ablations (In Progress)</h2>
+    <p>Fair redo of v3 ablations using the v7_mixed recipe instead of fake PD only. Baseline to beat: <span class="dice hi" style="font-size:13px">0.781</span>.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>Key difference</th><th>Script</th><th>Status</th><th>D1+New Dice</th><th>v3 equivalent</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>run_v12_tversky</td>
+            <td>TverskyLoss(α=0.3, β=0.7) replaces SoftDice on fake PD branch — FN penalised 2.3× more than FP</td>
+            <td class="mono">finetune_meniscus_v12_tversky.py</td>
+            <td><span class="chip chip-wip">Running</span></td>
+            <td class="na">—</td>
+            <td>v3_tversky: 0.656 (unfair — fake PD only)</td>
+          </tr>
+          <tr>
+            <td>run_v12_photometric</td>
+            <td>Photometric aug on fake PD branch: gamma (0.7–1.5), Gaussian blur (σ 0.3–1.2), contrast stretch (50% each)</td>
+            <td class="mono">finetune_meniscus_v12_photometric.py</td>
+            <td><span class="chip chip-wip">Running</span></td>
+            <td class="na">—</td>
+            <td>v3_photometric: 0.681 (unfair — fake PD only)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Rationale:</strong> v3 ablations were unfair because they used fake PD only — the setup that maxes out at 0.695. Now testing the same ideas on the v7_mixed setup (real PD + fake PD), which maxes out at 0.781. The question is whether these loss/aug choices add value on top of real PD labels.</div>
+  </div>
+
+  <!-- 5. Inference Table -->
+  <div class="section" id="inference">
+    <h2>5. Inference Table</h2>
+
+    <h3>On D1 (10 patients) — labeled_patients.txt</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Script</th><th>Checkpoint</th><th>Output Dir</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">infer_baseline_pd.sh</td><td class="mono">baseline_best_model.pth</td><td class="mono">real_pd_predictions_baseline</td></tr>
+          <tr><td class="mono">infer_labeled_pd_run002_v2.sh</td><td class="mono">run_002_v2/ckpt_best.pth</td><td class="mono">real_pd_predictions_run002_v2</td></tr>
+          <tr><td class="mono">infer_v5_mixed.sh</td><td class="mono">run_v5_mixed/ckpt_best.pth</td><td class="mono">real_pd_predictions_v5_mixed</td></tr>
+          <tr><td class="mono">infer_v7_realPD.sh</td><td class="mono">run_v7_realPD/ckpt_best.pth</td><td class="mono">real_pd_predictions_v7_realPD</td></tr>
+          <tr><td class="mono">infer_v7_mixed.sh</td><td class="mono">run_v7_mixed/ckpt_best.pth</td><td class="mono">real_pd_predictions_v7_mixed</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>On D1+New (17 patients) — labeled_patients_v8.txt</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Script</th><th>Checkpoint</th><th>Output Dir</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">infer_v8_baseline.sh</td><td class="mono">baseline_best_model.pth</td><td class="mono">real_pd_predictions_v8_baseline</td></tr>
+          <tr><td class="mono">infer_v8_realPD.sh</td><td class="mono">run_v7_realPD/ckpt_best.pth</td><td class="mono">real_pd_predictions_v8_realPD</td></tr>
+          <tr><td class="mono">infer_v8_pseudoPD.sh</td><td class="mono">run_002_v2/ckpt_best.pth</td><td class="mono">real_pd_predictions_v8_pseudoPD</td></tr>
+          <tr><td class="mono">infer_v8_mixed.sh</td><td class="mono">run_v7_mixed/ckpt_best.pth</td><td class="mono">real_pd_predictions_v8_mixed</td></tr>
+          <tr><td class="mono">infer_v8_clipped.sh</td><td class="mono">run_v7_mixed/ckpt_best.pth</td><td class="mono">real_pd_predictions_v8_clipped</td></tr>
+          <tr><td class="mono">infer_v9_mixed.sh</td><td class="mono">run_v9_mixed/ckpt_best.pth</td><td class="mono">real_pd_predictions_v9_mixed</td></tr>
+          <tr><td class="mono">infer_v10_boundary.sh</td><td class="mono">run_v10_boundary/ckpt_best.pth</td><td class="mono">real_pd_predictions_v10_boundary</td></tr>
+          <tr><td class="mono">infer_v11_cldice.sh</td><td class="mono">run_v11_cldice/ckpt_best.pth</td><td class="mono">real_pd_predictions_v11_cldice</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 6. Summary -->
+  <div class="section" id="summary">
+    <h2>6. Key Differences Summary</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Dimension</th><th>v5</th><th>v7</th><th>Phase 2 (v8–v11)</th><th>v12</th></tr></thead>
+        <tbody>
+          <tr><td>Real PD patients</td><td>10 (8 train, 2 val)</td><td>15 (13 train, 2 val)</td><td>15 (same as v7)</td><td>15 (same as v7)</td></tr>
+          <tr><td>Val patients</td><td class="mono">AC2B0AA9AE767D, AC2E254F52E467</td><td class="mono">AC0CE315D5758B, AC0CEE9C24F2B7</td><td>same as v7</td><td>same as v7</td></tr>
+          <tr><td>Fake PD (RegGAN)</td><td>Old, 69pt</td><td>Old, 69pt</td><td>Old, 69pt</td><td>Old, 69pt</td></tr>
+          <tr><td>Starting ckpt</td><td>baseline</td><td>baseline</td><td>baseline (v9–v11) / v7_mixed (v8 infer)</td><td>baseline</td></tr>
+          <tr><td>Eval cohort</td><td>D1 (10pt)</td><td>D1 (10pt)</td><td>D1+New (17pt)</td><td>D1+New (17pt)</td></tr>
+          <tr><td>Best Dice</td><td><span class="dice mid">0.769</span></td><td><span class="dice hi">0.781</span></td><td><span class="dice hi">0.784</span> (v8_clipped)</td><td>pending</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Key Lessons</h3>
+    <ul class="lessons">
+      <li>Loss function changes consistently hurt or are neutral on fake PD only — always test with real PD in the loop</li>
+      <li>Background context is required for boundary discrimination — removing it from CE (v9) caused −0.028 drop</li>
+      <li>Post-processing (fill_holes) is neutral on healthy patients — designed for torn/discontinuous meniscus cohort</li>
+      <li>Intensity clipping at 95th percentile (+0.003) — safe, cheap, marginal gain on clean scans</li>
+      <li>clDice (v11) wins the most individual patients (7/17) — best topology-aware loss tried so far</li>
+      <li>v10_boundary severely hurt AC07607B9E5295 (−0.163) — boundary loss is anatomy-dependent</li>
+      <li>Real PD alone from DESS baseline collapses (v5_realPD: 0.135) — always pair with fake PD for warm-start</li>
+    </ul>
+  </div>
+
+  <!-- 7. GT Paths -->
+  <div class="section" id="paths">
+    <h2>7. Local GT Mask Paths</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Cohort</th><th>Local Path</th><th>Format</th><th># Files</th></tr></thead>
+        <tbody>
+          <tr><td>D1 (10 eval patients)</td><td class="mono">~/Desktop/AImed-lab/SEGMENTATIONS/PD-segmentations-final/</td><td>.seg.nrrd</td><td>10</td></tr>
+          <tr><td>New 7 eval patients</td><td class="mono">~/Downloads/final-segmentations/</td><td>.seg.nrrd</td><td>7+</td></tr>
+          <tr><td>D2 fine-tuning + others</td><td class="mono">segmentation_pd/</td><td>.seg.nrrd</td><td>16</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="warn"><strong>D1 masks are NOT in the repo</strong> — they are at the AImed-lab path above. New 7 eval masks are in <code>~/Downloads/final-segmentations/</code> — correct path confirmed; <code>~/Downloads/segmentations/</code> does not exist.</div>
+  </div>
+
+  <!-- 8. Key Rules -->
+  <div class="section" id="rules">
+    <h2>8. Key Rules</h2>
+    <ul class="lessons">
+      <li><strong>D1</strong> (<code>labeled_patients.txt</code>) = hold-out eval only. NEVER in training.</li>
+      <li><strong>D2</strong> = real PD patients with manual meniscus labels used for fine-tuning only.</li>
+      <li>v8 eval cohort adds 7 new labeled patients on top of D1 — still all hold-out, never in training.</li>
+      <li><code>segmentation_runs/</code> = all model checkpoints, each in own subdirectory.</li>
+      <li><code>results/</code> = BigRed inference outputs. <code>results/final_results/</code> = local copies after SCP.</li>
+      <li>v7 dirs and v8 infer dirs are all new — nothing existing was overwritten.</li>
+    </ul>
+  </div>
+
+</main>
+</div>
+
+<script>
+  // Active nav link tracking
+  const sections = document.querySelectorAll('.section');
+  const links    = document.querySelectorAll('nav a');
+
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const active = document.querySelector(`nav a[href="#${e.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  sections.forEach(s => obs.observe(s));
+
+  // Download
+  function downloadPage() {
+    const html = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n' + document.head.innerHTML + '\n</head>\n<body>\n' + document.body.innerHTML + '\n</body>\n</html>';
+    const blob = new Blob([html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'reggan_experiment_log.html';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+</script>

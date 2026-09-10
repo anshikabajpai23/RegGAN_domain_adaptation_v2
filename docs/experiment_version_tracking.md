@@ -1,7 +1,7 @@
 # Experiment Version Tracking — Full Log
 > BigRed200 base: `/N/project/prostate_cancer_ai/anshika/regGAN/`
 > Local base: `~/Desktop/github/RegGAN_domain_adaptation_v2/`
-> Last updated: 2026-08-05
+> Last updated: 2026-08-29
 
 ---
 
@@ -31,7 +31,7 @@ AC149BC218E75C   AC111633B463BB   AC13300201B926   AC12026D14291F   AC13637DA253
 ### D1+New — Extended Hold-out (17 patients) — v8 only
 **File:** `labeled_patients_v8.txt` (local + BigRed root)
 - D1 (10 above) + 7 new: `AC000550763509, AC005135D3495B, AC04433E37DB66, AC056ADCE8BE28, AC07607B9E5295, AC0D1A9818A6FC, AC0F11041F5180`
-- GT masks (new 7, local): `~/Downloads/segmentations/` (`.seg.nrrd`)
+- GT masks (new 7, local): `~/Downloads/final-segmentations/` (`.seg.nrrd`)
 - PD images (local): `Desktop/AImed-lab/IU-Dess-dataset/iu-dataset/pd-files/`
 
 ---
@@ -75,35 +75,69 @@ AC149BC218E75C   AC111633B463BB   AC13300201B926   AC12026D14291F   AC13637DA253
 
 ### 4b. v3 Ablations — fake PD only, all use Old RegGAN segmentation_data_v2, from baseline
 
-| Run | What changed | D1 Dice (10pt) |
+| Run | What changed | D1 Dice (8pt) |
 |---|---|---|
-| run_v3_rotation | +rotation augmentation | TBD |
-| run_v3_tversky | Tversky loss | TBD |
-| run_v3_elastic | +elastic deform aug | TBD |
-| run_v3_photometric | +photometric aug | TBD |
-| run_v3_resnet50 | ResNet50 encoder | TBD |
-| run_v3_5slice | 5-slice 2.5D context | TBD |
+| run_v3_rotation | +rotation augmentation | 0.676 |
+| run_v3_tversky | Tversky loss (α=0.3, β=0.7) | 0.656 |
+| run_v3_elastic | +elastic deform aug | 0.652 |
+| run_v3_photometric | +photometric aug | 0.681 |
+| run_v3_resnet50 | ResNet50 encoder | 0.639 |
+| run_v3_5slice | 5-slice 2.5D context | 0.486 |
+
+> All v3 ablations worse than or equal to run_002_v2 baseline (0.685). Tversky loss specifically -2.9%.
 
 ### 4c. v4 — Real PD fine-tuning starting from run_002_v2, D2 (10 patients)
 
-| Run | Real PD Data | Fake PD Data | Starting Ckpt | Eval Set | D1 Dice (10pt) |
+| Run | Real PD Data | Fake PD Data | Starting Ckpt | Eval Set | D1 Dice (8pt) |
 |---|---|---|---|---|---|
-| run_v4_realPD | real_pd_seg_data (8 train, 2 val) | — | run_002_v2 | D1 | TBD |
-| run_v4_mixed | real_pd_seg_data (8 train, 2 val) | segmentation_data_v2 | run_002_v2 | D1 | TBD |
+| run_v4_realPD | real_pd_seg_data (8 train, 2 val) | — | run_002_v2 | D1 | 0.775 |
+| run_v4_mixed | real_pd_seg_data (8 train, 2 val) | segmentation_data_v2 | run_002_v2 | D1 | 0.759 |
 
 ### 4d. v5 — Real PD fine-tuning starting from DESS baseline, D2 (10 patients)
 
-| Run | Real PD Data | Fake PD Data | Starting Ckpt | Eval Set | D1 Dice (10pt) | Notes |
+| Run | Real PD Data | Fake PD Data | Starting Ckpt | Eval Set | D1 Dice (8pt) | Notes |
 |---|---|---|---|---|---|---|
 | run_v5_realPD | real_pd_seg_data (8 train, 2 val) | — | baseline | D1 | 0.135 | Collapsed — real PD only not enough from scratch |
-| run_v5_mixed | real_pd_seg_data (8 train, 2 val) | segmentation_data_v2 | baseline | D1 | **0.769** | **Best overall on D1** |
+| run_v5_mixed | real_pd_seg_data (8 train, 2 val) | segmentation_data_v2 | baseline | D1 | 0.765 | Best on 8pt at the time |
 
 ### 4e. v7 — Real PD fine-tuning starting from DESS baseline, D2+aug3rd (15 patients)
 
-| Run | Real PD Data | Fake PD Data | Starting Ckpt | Val Dice (2pt) | D1 Dice (10pt) | D1+New Dice (17pt) |
-|---|---|---|---|---|---|---|
-| run_v7_realPD | real_pd_seg_data_v7 (13 train, 2 val) | — | baseline | PENDING | PENDING | PENDING |
-| run_v7_mixed | real_pd_seg_data_v7 (13 train, 2 val) | segmentation_data_v2 | baseline | **0.7644** (ep26) | PENDING | PENDING |
+| Run | Real PD Data | Fake PD Data | Starting Ckpt | Key change | D1+New Dice (17pt) |
+|---|---|---|---|---|---|
+| run_v7_realPD | real_pd_seg_data_v7 (13 train, 2 val) | — | baseline | 15pt real PD, no fake | 0.774 |
+| run_v7_mixed | real_pd_seg_data_v7 (13 train, 2 val) | segmentation_data_v2 | baseline | 15pt real PD + fake | **0.781** |
+
+> run_v7_mixed = **best training run overall**. Checkpoint used for all v8+ inference.
+
+### 4f. Phase 2 — Inference experiments on v7_mixed checkpoint (no retraining)
+
+> All use run_v7_mixed/ckpt_best.pth. Evaluated on D1+New (17pt). "v8" = naming convention for 17pt inference.
+
+| Label | What changed | Script | D1+New Dice (17pt) | vs baseline |
+|---|---|---|---|---|
+| v8_mixed | Baseline inference, no changes | infer_v8_mixed.sh | 0.781 | — |
+| v8_filled (Exp B) | Post-processing: fill_holes + remove_small_objects | postprocess_predictions.py | 0.778 | -0.003 |
+| v8_clipped (Exp A) | Input clipped to 95th percentile before inference | infer_v8_clipped.sh | 0.784 | +0.003 |
+
+### 4g. Phase 2 — Retraining experiments (new loss functions, same data as v7_mixed)
+
+> All start from DESS baseline, use real_pd_seg_data_v7 (15pt) + segmentation_data_v2 (fake PD).
+> Same hyperparams as v7_mixed (LR=1e-5, class weights 0.1/1.5/1.5, 50 epochs, patience=10) unless noted.
+
+| Run | Key difference | Script | D1+New Dice (17pt) | vs baseline | Win count |
+|---|---|---|---|---|---|
+| run_v9_mixed | Segmentation-restricted CE (background excluded from loss) | finetune_meniscus_v9_mixed.py | 0.753 | -0.028 | 0/17 |
+| run_v10_boundary | Standard CE + Dice + boundary-aware loss (λ=1.0) | finetune_meniscus_v10_boundary.py | — | — | — |
+| run_v11_cldice | Standard CE + Dice + clDice topology loss (λ=1.0, iters=10) | finetune_meniscus_v11_cldice.py | — | — | — |
+
+> v9 confirmed: restricting background CE hurt performance. Background context is needed for boundary discrimination.
+> v10 and v11: inference complete, fill in Dice when eval runs.
+
+**Key lessons from Phase 2:**
+- Loss function changes (Tversky, restricted CE) consistently hurt — do not retry without new insight
+- Post-processing (fill_holes) neutral on healthy patients — designed for torn cohort
+- Intensity clipping marginally helps (+0.003) — minimal effect on healthy patients
+- clDice (v11): wins most individual patients (7/17) — most promising topology loss so far
 
 ---
 
@@ -129,6 +163,10 @@ AC149BC218E75C   AC111633B463BB   AC13300201B926   AC12026D14291F   AC13637DA253
 | infer_v8_realPD.sh | run_v7_realPD/ckpt_best.pth | real_pd_predictions_v8_realPD | analysis_v8_17patients.ipynb |
 | infer_v8_pseudoPD.sh | run_002_v2/ckpt_best.pth | real_pd_predictions_v8_pseudoPD | analysis_v8_17patients.ipynb |
 | infer_v8_mixed.sh | run_v7_mixed/ckpt_best.pth | real_pd_predictions_v8_mixed | analysis_v8_17patients.ipynb |
+| infer_v8_clipped.sh | run_v7_mixed/ckpt_best.pth | real_pd_predictions_v8_clipped | analysis_phase2_experiments.ipynb |
+| infer_v9_mixed.sh | run_v9_mixed/ckpt_best.pth | real_pd_predictions_v9_mixed | analysis_phase2_experiments.ipynb |
+| infer_v10_boundary.sh | run_v10_boundary/ckpt_best.pth | real_pd_predictions_v10_boundary | analysis_phase2_experiments.ipynb |
+| infer_v11_cldice.sh | run_v11_cldice/ckpt_best.pth | real_pd_predictions_v11_cldice | analysis_phase2_experiments.ipynb |
 
 ### On Control cohort (20 patients) — iu-control/pd-files, first 20 alphabetically
 
@@ -142,16 +180,15 @@ AC149BC218E75C   AC111633B463BB   AC13300201B926   AC12026D14291F   AC13637DA253
 
 ## 6. Key Differences Summary
 
-| Dimension | v5 | v7 | v8 |
+| Dimension | v5 | v7 | Phase 2 (v8–v11) |
 |---|---|---|---|
-| Real PD training patients | 10 (8 train, 2 val) | 15 (13 train, 2 val) | N/A (inference only) |
-| Val patients | AC2B0AA9AE767D, AC2E254F52E467 | AC0CE315D5758B, AC0CEE9C24F2B7 | N/A |
+| Real PD training patients | 10 (8 train, 2 val) | 15 (13 train, 2 val) | 15 (same as v7) |
+| Val patients | AC2B0AA9AE767D, AC2E254F52E467 | AC0CE315D5758B, AC0CEE9C24F2B7 | AC0CE315D5758B, AC0CEE9C24F2B7 |
 | Fake PD (RegGAN) | Old RegGAN, 69pt | Old RegGAN, 69pt | Old RegGAN, 69pt |
-| Starting checkpoint | baseline | baseline | N/A |
+| Starting checkpoint | baseline | baseline | baseline (v9–v11) / v7_mixed ckpt (v8 infer) |
 | Eval cohort | D1 (10pt) | D1 (10pt) | D1+New (17pt) |
-| # models compared | 3 | 3 | 4 |
-| Models compared | baseline, run_002_v2, v5_mixed | baseline, v7_realPD, v7_mixed | baseline, v7_realPD, run_002_v2, v7_mixed |
-| Analysis notebook | analysis_abstract_3models.ipynb | analysis_v7_models.ipynb | analysis_v8_17patients.ipynb |
+| Best Dice | 0.769 (v5_mixed) | 0.781 (v7_mixed) | 0.784 (v8_clipped); v11_cldice wins 7/17 patients |
+| Analysis notebook | analysis_abstract_3models.ipynb | analysis_v7_models.ipynb | analysis_phase2_experiments.ipynb |
 
 ---
 
@@ -160,12 +197,11 @@ AC149BC218E75C   AC111633B463BB   AC13300201B926   AC12026D14291F   AC13637DA253
 | Cohort | Local Path | Format | # Files |
 |---|---|---|---|
 | D1 (10 eval patients) | `~/Desktop/AImed-lab/SEGMENTATIONS/PD-segmentations-final/` | `.seg.nrrd` | 10 |
-| New 7 eval patients | `segmentation_pd/segmentations/` (in repo) | `.seg.nrrd` | 7 |
+| New 7 eval patients | `~/Downloads/final-segmentations/` | `.seg.nrrd` | 7+ |
 | D2 fine-tuning + others | `segmentation_pd/` root (in repo) | `.seg.nrrd` | 16 |
 
-> `segmentation_pd/segmentations/` = exactly the 7 new eval patients from labeled_patients_v8.txt
-> `segmentation_pd/` root = mix of D2 fine-tuning patients + some new eval patients (NOT all 17 eval)
 > D1 masks are NOT in the repo — they are at the AImed-lab path above
+> New 7 eval masks are in `~/Downloads/final-segmentations/` — this is the correct path (NOT `~/Downloads/segmentations/` which does not exist)
 
 ---
 

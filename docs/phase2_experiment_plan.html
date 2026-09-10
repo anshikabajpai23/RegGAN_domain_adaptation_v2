@@ -94,6 +94,13 @@
     <div class="header-meta">August 2026 &nbsp;·&nbsp; Anshika Bajpai</div>
   </div>
 
+  <div style="margin-bottom:20px">
+    <button onclick="downloadPage()" style="display:inline-flex;align-items:center;gap:8px;padding:9px 18px;background:var(--accent);color:#fff;border:none;border-radius:5px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;letter-spacing:.01em">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 9.5L3.5 6M7 9.5L10.5 6M7 9.5V1M1.5 12.5H12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Download HTML
+    </button>
+  </div>
+
   <div class="context-block">
     <p>
       This document summarises the planned experiments for Phase 2 of the meniscus segmentation project.
@@ -213,12 +220,12 @@
           </td>
           <td>
             After inference, apply morphological fill-holes and remove very small isolated prediction fragments. The model output is cleaned before Dice is computed.
-            <div class="result-note">Dice on 17 healthy patients: <strong>0.770</strong> (vs 0.781 baseline). No improvement on healthy cohort, as expected. Primarily designed to help on torn meniscus patients. Torn cohort results pending.</div>
+            <div class="result-note">Dice on 17 healthy patients: <strong>0.778</strong> (vs 0.781 baseline). No improvement on healthy cohort, as expected. Primarily designed to help on torn meniscus patients. Torn cohort results pending.</div>
           </td>
           <td>Tear gaps appear as holes inside the predicted boundary. Fill-holes directly closes these gaps. Tiny fragment islands are discarded. Effect is most pronounced where predictions are fragmented by tear signal.</td>
           <td>
             <span class="chip chip-partial">&#9654; Partial result</span>
-            <div class="result-note" style="margin-top:6px">Healthy: 0.770 (no gain)<br>Torn cohort: pending</div>
+            <div class="result-note" style="margin-top:6px">Healthy: 0.778 (no gain)<br>Torn cohort: pending</div>
           </td>
         </tr>
         <tr>
@@ -229,7 +236,10 @@
           </td>
           <td>Before inference, each PD image slice is clipped to its 95th intensity percentile, suppressing the brightest pixels (tear fluid), then re-normalised.</td>
           <td>The model was trained on healthy menisci with uniformly dark fluid. Clipping makes torn meniscus input look more like the training distribution, without retraining.</td>
-          <td><span class="chip chip-prog">&#9654; Running on HPC</span></td>
+          <td>
+            <span class="chip chip-done">&#10003; Completed</span>
+            <div class="result-note" style="margin-top:6px">Dice: <strong>0.784</strong> on 17 patients (vs 0.781 baseline). Small improvement (+0.003); tear cohort results pending.</div>
+          </td>
         </tr>
         <tr>
           <td class="col-num">3</td>
@@ -239,7 +249,10 @@
           </td>
           <td>Retrain the model with cross-entropy loss computed only over foreground (meniscus) pixels. Background pixels are fully excluded from the classification loss.</td>
           <td>Background pixels (~90% of a slice) dilute the gradient signal even when down-weighted. Excluding them forces the model to focus entirely on meniscus discrimination.</td>
-          <td><span class="chip chip-prog">&#9654; Training on HPC</span></td>
+          <td>
+            <span class="chip chip-done">&#10003; Completed</span>
+            <div class="result-note" style="margin-top:6px">Dice: <strong>0.753</strong> on 17 patients (vs 0.781 baseline). Restricting background worsened performance; background context appears important for boundary discrimination.</div>
+          </td>
         </tr>
         <tr>
           <td class="col-num">4</td>
@@ -249,7 +262,10 @@
           </td>
           <td>Add an extra penalty term computed only at the meniscus boundary pixels (a thin ring around the GT mask edge). Errors at the boundary are penalised more heavily than interior errors.</td>
           <td>Tears cause errors specifically at the boundary. A targeted penalty at the boundary directly incentivises the model to preserve continuity even under pathological signal.</td>
-          <td><span class="chip chip-plan">&#9675; Planned</span> &nbsp;<span class="chip chip-novel">&#9733; Novel</span></td>
+          <td>
+            <span class="chip chip-done">&#10003; Completed</span> &nbsp;<span class="chip chip-novel">&#9733; Novel</span>
+            <div class="result-note" style="margin-top:6px">Dice: <strong>0.753</strong> on 17 patients (vs 0.781 baseline, -0.028). Boundary penalty did not improve over baseline; may have over-penalised at false boundaries introduced by tear signal.</div>
+          </td>
         </tr>
         <tr>
           <td class="col-num">5</td>
@@ -259,7 +275,10 @@
           </td>
           <td>Add a centerline Dice (clDice) loss term that rewards topologically correct, connected predictions. Standard Dice does not penalise fragmented outputs as long as total overlap is high.</td>
           <td>Torn meniscus predictions are topologically incorrect: disconnected islands instead of one connected structure. clDice directly penalises this.</td>
-          <td><span class="chip chip-plan">&#9675; Planned</span></td>
+          <td>
+            <span class="chip chip-done">&#10003; Completed</span>
+            <div class="result-note" style="margin-top:6px">Dice: <strong>0.777</strong> on 17 patients (vs 0.781 baseline, -0.004). Closest to baseline of all retrained models; wins most individual patients (7/17). Most promising topology-aware approach.</div>
+          </td>
         </tr>
         <tr>
           <td class="col-num">6</td>
@@ -294,4 +313,16 @@
     Experiment 1 is primarily expected to help on the torn meniscus cohort rather than the healthy evaluation set.
   </div>
 
+
+<script>
+function downloadPage() {
+  var html = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n' + document.head.innerHTML + '\n</head>\n<body>\n' + document.body.innerHTML + '\n</body>\n</html>';
+  var blob = new Blob([html], {type: 'text/html'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'phase2_experiment_plan.html';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+</script>
 </div>
