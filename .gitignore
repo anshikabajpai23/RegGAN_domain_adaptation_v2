@@ -28,3 +28,4 @@ slicer/
 data/
 .DS_Store
 labeled_patients.txt
+*.pth
