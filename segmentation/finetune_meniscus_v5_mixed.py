@@ -108,13 +108,16 @@ def dice_binary(preds, targets, eps=1e-6):
 def run_epoch(model, real_loader, fake_loader, optimizer,
               merged_loss_fn, fake_loss_fn, device, train=True):
     model.train() if train else model.eval()
-    total_loss, dice_sum, n = 0.0, 0.0, 0
+    total_loss, dice_sum, dice_fake_sum, n = 0.0, 0.0, 0.0, 0
     real_iter = iter(real_loader)
 
     with torch.set_grad_enabled(train):
         for fake_batch in fake_loader:
             xf, yf = fake_batch["image"].to(device), fake_batch["mask"].to(device)
-            loss_f  = fake_loss_fn(model(xf), yf)
+            # hoisted out of the loss call so Dice can be scored on the same
+            # forward pass — identical compute, model(xf) still runs once
+            logits_f = model(xf)
+            loss_f   = fake_loss_fn(logits_f, yf)
 
             try:
                 real_batch = next(real_iter)
@@ -129,11 +132,14 @@ def run_epoch(model, real_loader, fake_loader, optimizer,
             if train:
                 optimizer.zero_grad(); loss.backward(); optimizer.step()
 
-            total_loss += loss.item()
-            dice_sum   += dice_binary(logits_r.argmax(1), yr)
+            total_loss    += loss.item()
+            dice_sum      += dice_binary(logits_r.argmax(1), yr)
+            dice_fake_sum += dice_binary(logits_f.argmax(1), yf)
             n += 1
 
-    return total_loss / max(n, 1), dice_sum / max(n, 1)
+    return (total_loss / max(n, 1),
+            dice_sum      / max(n, 1),     # real-PD Dice
+            dice_fake_sum / max(n, 1))     # fake-PD Dice
 
 
 def main():
@@ -205,13 +211,16 @@ def main():
     best_val_dice, no_improve = -1.0, 0
     for epoch in range(args.epochs):
         lr = optimizer.param_groups[0]["lr"]
-        tl, td = run_epoch(model, real_train_loader, fake_train_loader,
-                           optimizer, merged_loss_fn, fake_loss_fn, device, train=True)
-        vl, vd = run_epoch(model, real_val_loader,   fake_val_loader,
-                           optimizer, merged_loss_fn, fake_loss_fn, device, train=False)
+        tl, td, tdf = run_epoch(model, real_train_loader, fake_train_loader,
+                                optimizer, merged_loss_fn, fake_loss_fn, device, train=True)
+        vl, vd, vdf = run_epoch(model, real_val_loader,   fake_val_loader,
+                                optimizer, merged_loss_fn, fake_loss_fn, device, train=False)
         scheduler.step()
-        log.info(f"Epoch {epoch:03d}  lr={lr:.2e}  train={tl:.4f}  val={vl:.4f}  "
-                 f"val_dice(real)={vd:.4f}")
+        # gap = train-minus-val on real PD: large and growing => overfitting.
+        # dice(fake) vs dice(real) on the same row => domain gap.
+        log.info(f"Epoch {epoch:03d}  lr={lr:.2e}  loss_tr={tl:.4f} loss_va={vl:.4f}  |  "
+                 f"dice_real tr={td:.4f} va={vd:.4f} gap={td - vd:+.4f}  |  "
+                 f"dice_fake tr={tdf:.4f} va={vdf:.4f}")
         torch.save(model.state_dict(), os.path.join(args.out_dir, "ckpt_latest.pth"))
         if vd > best_val_dice:
             best_val_dice, no_improve = vd, 0
