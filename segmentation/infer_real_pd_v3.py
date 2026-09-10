@@ -73,12 +73,21 @@ def get_effective_affine_for_pd(nifti_path):
     return affine.astype(np.float32), (sp_R, eff_sp_A, eff_sp_S)
 
 
-def predict_volume(vol, model, device, in_channels, batch_size=8):
-    """vol: (n_slices, 384, 384) float32 in [0,1]. Returns (n_slices, 384, 384) int64."""
+def predict_volume(vol, model, device, in_channels, batch_size=8, offsets=None):
+    """vol: (n_slices, 384, 384) float32 in [0,1]. Returns (n_slices, 384, 384) int64.
+
+    offsets: explicit override for which neighbour slices form the 2.5D stack,
+    e.g. (0, 0, 0) or (-2, 0, 2). Must have len == in_channels. Edge clamping
+    (max(0, min(n-1, idx+o))) is applied identically regardless of offsets, so
+    switching offsets is the ONLY thing that changes vs the default stack.
+    """
     n = vol.shape[0]
     preds = np.zeros((n, vol.shape[1], vol.shape[2]), dtype=np.int64)
 
-    if in_channels == 5:
+    if offsets is not None:
+        assert len(offsets) == in_channels, \
+            f"--offsets has {len(offsets)} values, in_channels={in_channels}"
+    elif in_channels == 5:
         offsets = (-2, -1, 0, 1, 2)
     else:
         offsets = (-1, 0, 1)
@@ -109,7 +118,14 @@ def main():
     ap.add_argument("--clip_percentile", type=float, default=None,
                     help="If set, clip each slice to this percentile before inference (e.g. 95). "
                          "Suppresses hyperintense tear fluid signal. Default: no clipping.")
+    ap.add_argument("--offsets", type=int, nargs="+", default=None,
+                    help="Override the 2.5D stack's neighbour offsets, e.g. "
+                         "'0 0 0' or '-2 0 2'. Must match --in_channels length. "
+                         "Default: (-1,0,1) for in_channels=3, (-2,-1,0,1,2) for 5. "
+                         "Everything else (preprocessing, edge clamping, affine) is unchanged.")
     args = ap.parse_args()
+    if args.offsets is not None and len(args.offsets) != args.in_channels:
+        ap.error(f"--offsets has {len(args.offsets)} values but --in_channels={args.in_channels}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info(f"Device: {device}  |  encoder: {args.encoder}  |  in_channels: {args.in_channels}  |  "
@@ -132,7 +148,8 @@ def main():
             threshold = np.percentile(vol, args.clip_percentile)
             vol = np.clip(vol, 0, threshold)
             vol = vol / (threshold + 1e-8)  # renormalise to [0,1]
-        preds = predict_volume(vol, model, device, args.in_channels, args.batch_size)
+        preds = predict_volume(vol, model, device, args.in_channels, args.batch_size,
+                               offsets=args.offsets)
 
         n_meniscus = int((preds > 0).any(axis=(1, 2)).sum())
         log.info(f"  {fname}: {vol.shape[0]} slices, {n_meniscus} with meniscus, "
