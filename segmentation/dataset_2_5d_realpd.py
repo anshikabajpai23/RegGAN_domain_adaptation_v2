@@ -62,7 +62,12 @@ class RealPDDataset(Dataset):
         image = np.stack([prev, curr, nxt], axis=0)
         image = np.clip(image, 0.0, 1.0)
 
+        # patient_id lets per-patient (not just pooled) Dice be computed at
+        # eval time. Training reads only "image"/"mask" — this key is inert there.
+        pid, _ = stem.rsplit("_", 1)
+
         return {
-            "image": torch.from_numpy(image).float(),
-            "mask":  torch.from_numpy(mask).long(),
+            "image":      torch.from_numpy(image).float(),
+            "mask":       torch.from_numpy(mask).long(),
+            "patient_id": pid,
         }
