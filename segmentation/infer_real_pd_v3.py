@@ -128,8 +128,14 @@ def main():
         ap.error(f"--offsets has {len(args.offsets)} values but --in_channels={args.in_channels}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # offsets logged explicitly: without this the only record of which 2.5D stack
+    # was actually used is the calling shell's own echo, which shows intent rather
+    # than what argparse parsed.
+    _eff_offsets = (tuple(args.offsets) if args.offsets is not None
+                    else ((-2, -1, 0, 1, 2) if args.in_channels == 5 else (-1, 0, 1)))
     log.info(f"Device: {device}  |  encoder: {args.encoder}  |  in_channels: {args.in_channels}  |  "
-             f"clip_percentile: {args.clip_percentile}")
+             f"clip_percentile: {args.clip_percentile}  |  offsets: {_eff_offsets}"
+             f"{' (default)' if args.offsets is None else ' (explicit)'}")
 
     model = build_model(args.ckpt, args.encoder, args.in_channels, device)
     log.info(f"Loaded checkpoint from {args.ckpt}")
