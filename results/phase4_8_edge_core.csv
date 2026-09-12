@@ -1,0 +1,7 @@
+variant,bucket,slices,fp_px,fn_px,wrong_px,share
+replica,empty,32,2001,0,2001,0.3305
+replica,edge,16,1564,980,2544,0.4201
+replica,core,14,808,702,1510,0.2494
+P2,empty,32,1524,0,1524,0.2607
+P2,edge,16,1640,1086,2726,0.4663
+P2,core,14,916,680,1596,0.273

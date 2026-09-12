@@ -1,0 +1,7 @@
+variant,bucket,slices,fp_px,fn_px,wrong_px,share
+seed42,empty,32,2001,0,2001,0.3305
+seed42,edge,16,1564,980,2544,0.4201
+seed42,core,14,808,702,1510,0.2494
+seed7,empty,32,1670,0,1670,0.2983
+seed7,edge,16,1373,963,2336,0.4173
+seed7,core,14,720,872,1592,0.2844
