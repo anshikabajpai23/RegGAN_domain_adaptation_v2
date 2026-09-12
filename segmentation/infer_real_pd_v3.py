@@ -73,13 +73,20 @@ def get_effective_affine_for_pd(nifti_path):
     return affine.astype(np.float32), (sp_R, eff_sp_A, eff_sp_S)
 
 
-def predict_volume(vol, model, device, in_channels, batch_size=8, offsets=None):
+def predict_volume(vol, model, device, in_channels, batch_size=8, offsets=None, tta=False):
     """vol: (n_slices, 384, 384) float32 in [0,1]. Returns (n_slices, 384, 384) int64.
 
     offsets: explicit override for which neighbour slices form the 2.5D stack,
     e.g. (0, 0, 0) or (-2, 0, 2). Must have len == in_channels. Edge clamping
     (max(0, min(n-1, idx+o))) is applied identically regardless of offsets, so
     switching offsets is the ONLY thing that changes vs the default stack.
+
+    tta: Phase 4 step 10 flip TTA (default False -- every existing call site
+    is unaffected unless it opts in). Predicts on x, hflip(x), vflip(x),
+    hvflip(x); un-flips each softmax map back to the original orientation
+    before averaging, then argmaxes the average. hflip/vflip apply to the
+    LAST TWO dims (H, W) only -- the stack's channel dim is untouched, so
+    flipping doesn't scramble which offset is which.
     """
     n = vol.shape[0]
     preds = np.zeros((n, vol.shape[1], vol.shape[2]), dtype=np.int64)
@@ -100,8 +107,20 @@ def predict_volume(vol, model, device, in_channels, batch_size=8, offsets=None):
                 stack = [vol[max(0, min(n - 1, idx + o))] for o in offsets]
                 batch_stacks.append(np.stack(stack, axis=0))
             x = torch.from_numpy(np.stack(batch_stacks, axis=0)).float().to(device)
-            out = model(x)
-            preds[start:end] = out.argmax(dim=1).cpu().numpy()
+
+            if not tta:
+                out = model(x)
+                preds[start:end] = out.argmax(dim=1).cpu().numpy()
+            else:
+                # (flip_dims_to_apply, flip_dims_to_undo) -- H=-2, W=-1
+                variants = [(), (-1,), (-2,), (-2, -1)]
+                prob_sum = None
+                for dims in variants:
+                    xv = torch.flip(x, dims) if dims else x
+                    p = torch.softmax(model(xv), dim=1)
+                    p = torch.flip(p, dims) if dims else p   # undo, back to original orientation
+                    prob_sum = p if prob_sum is None else prob_sum + p
+                preds[start:end] = (prob_sum / len(variants)).argmax(dim=1).cpu().numpy()
 
     return preds
 
@@ -123,6 +142,9 @@ def main():
                          "'0 0 0' or '-2 0 2'. Must match --in_channels length. "
                          "Default: (-1,0,1) for in_channels=3, (-2,-1,0,1,2) for 5. "
                          "Everything else (preprocessing, edge clamping, affine) is unchanged.")
+    ap.add_argument("--tta", action="store_true",
+                    help="Phase 4 step 10: 4-way flip TTA (identity/hflip/vflip/hvflip), "
+                         "softmax-averaged. Off by default.")
     args = ap.parse_args()
     if args.offsets is not None and len(args.offsets) != args.in_channels:
         ap.error(f"--offsets has {len(args.offsets)} values but --in_channels={args.in_channels}")
@@ -155,7 +177,7 @@ def main():
             vol = np.clip(vol, 0, threshold)
             vol = vol / (threshold + 1e-8)  # renormalise to [0,1]
         preds = predict_volume(vol, model, device, args.in_channels, args.batch_size,
-                               offsets=args.offsets)
+                               offsets=args.offsets, tta=args.tta)
 
         n_meniscus = int((preds > 0).any(axis=(1, 2)).sum())
         log.info(f"  {fname}: {vol.shape[0]} slices, {n_meniscus} with meniscus, "
