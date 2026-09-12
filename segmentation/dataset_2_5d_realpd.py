@@ -12,10 +12,22 @@ from torch.utils.data import Dataset
 
 
 class RealPDDataset(Dataset):
-    def __init__(self, img_root, mask_root, augment=False):
+    def __init__(self, img_root, mask_root, augment=False, aug_mode="original"):
+        """
+        aug_mode: "original" (default) keeps this class's own augmentation
+            exactly as before — additive brightness U(-0.1,0.1) at p=0.5,
+            additive noise N(0,0.02) at p=0.3. Every existing caller
+            (including finetune_meniscus_v7_replica.py, the fixed reference
+            recipe) is unaffected unless it opts in.
+            "equalized" matches dataset_2_5d_v2.py's fake-branch augmentation
+            exactly: multiplicative brightness U(0.8,1.2) at p=1.0, additive
+            noise N(0,0.02) at p=1.0, clip after each op. Requested by P4 so
+            real and fake branches see the same augmentation distribution.
+        """
         self.img_root  = img_root
         self.mask_root = mask_root
         self.augment   = augment
+        self.aug_mode  = aug_mode
         self.slices    = sorted([
             os.path.splitext(os.path.basename(f))[0]
             for f in glob.glob(os.path.join(img_root, "*.npy"))
@@ -51,13 +63,20 @@ class RealPDDataset(Dataset):
             if np.random.rand() < 0.5:
                 prev, curr, nxt = prev[::-1].copy(), curr[::-1].copy(), nxt[::-1].copy()
                 mask = mask[::-1].copy()
-            # Brightness + noise
-            if np.random.rand() < 0.5:
-                for arr in [prev, curr, nxt]:
-                    arr += np.random.uniform(-0.1, 0.1)
-            if np.random.rand() < 0.3:
-                for arr in [prev, curr, nxt]:
-                    arr += np.random.randn(*arr.shape).astype(np.float32) * 0.02
+            if self.aug_mode == "equalized":
+                # Matches dataset_2_5d_v2.py's fake-branch augmentation exactly.
+                factor = np.random.uniform(0.8, 1.2)
+                prev, curr, nxt = (np.clip(a * factor, 0.0, 1.0) for a in (prev, curr, nxt))
+                prev, curr, nxt = (np.clip(a + np.random.normal(0, 0.02, a.shape).astype(np.float32), 0.0, 1.0)
+                                   for a in (prev, curr, nxt))
+            else:
+                # Brightness + noise (original)
+                if np.random.rand() < 0.5:
+                    for arr in [prev, curr, nxt]:
+                        arr += np.random.uniform(-0.1, 0.1)
+                if np.random.rand() < 0.3:
+                    for arr in [prev, curr, nxt]:
+                        arr += np.random.randn(*arr.shape).astype(np.float32) * 0.02
 
         image = np.stack([prev, curr, nxt], axis=0)
         image = np.clip(image, 0.0, 1.0)
