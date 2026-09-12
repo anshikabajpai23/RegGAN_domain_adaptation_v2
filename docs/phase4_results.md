@@ -31,6 +31,8 @@
 | Contour | No | Core at ceiling. |
 | Diffusion | No | Translation not limiting. |
 | FMed 3D nnU-Net + adversarial | **Yes, big step** | Only arch with z-context. After P4. |
+| Slice-sequence architecture (ConvLSTM / cross-slice attention) instead of fixed 2.5D stack (Anshika) | Worth trying | Check 2 showed the model ignores neighbors at FIXED channel positions (B≈A, C hurts 17/17). A sequence model that learns to weight/aggregate neighboring slices adaptively, rather than baking z-context into 3 fixed input channels, targets the same failure (no usable z-context) via a different mechanism than P4's stride fix or 3D nnU-Net's full-volume patch. Untested; would need its own retrain, not a drop-in change. |
+| Contrast-based training + shape training for torn meniscus (Anshika) | Different target, not yet scoped | None of checks 1-6 were run on the 20-patient torn cohort (no GT there). Contrast/intensity training was already checked and dropped for the HEALTHY-knee error (check 6: geometric, not intensity-driven) — but tear signal (bright fluid at the tear site) is a genuinely different appearance problem, so that verdict may not transfer. A shape prior specific to torn anatomy (vs. the general 3D shape prior already covered by FMed's paper, which is healthy-shape only) targets the doc's own torn-cohort failure modes (§8: split prediction at the tear, missed detection) that no current check or approach addresses. Needs GT on the torn cohort before it can be evaluated at all. |
 | Review paper | reading | |
 | RegGAN rigid/SDM | No for Dice | Methods novelty only. |
 | Tversky / over-segment | No | Model under-segments cohort-wide (FP/FN 1.1). |
@@ -65,9 +67,9 @@
 | 4 | Notch-gap px counts, 2 single-span pts | 5 min | closes C3 | Done — see `reggan_dice_debug.md` §4.4 |
 | 5 | Seed-7 replica | 4 h GPU bg | noise floor | **Done.** Clean same-script, two-seed comparison (seed 42 vs seed 7): best epoch 10 vs 12 (+2). dice_real_va @best 0.7809 vs 0.7860 (+0.0051). Per-patient: AC0CE315D5758B −0.0032, AC0CEE9C24F2B7 +0.0226. **Per-patient max \|Δ\| = 0.0226, mean \|Δ\| = 0.0129** — larger than the doc's earlier 0.017 estimate (which compared replica vs the original run, not two seeds of the same script). Plateau range: seed42 0.0258, seed7 0.0212. |
 | 6 | k-fold (≥3 folds) | 3×4 h | CI + checkpoint | Pending |
-| 7 | **P4** stride 4–5 + equalize aug, one retrain | prep + 4 h | does z-context cut end error; case for 3D | Pending |
-| 8 | **P2** negatives adjacent+notch, new dir, one retrain | prep + 4 h | halluc drop, +0.02–0.03 | Pending |
-| 9 | **P1** sampler cap, one retrain | 4 h | closes exposure question | Pending |
+| 7 | **P4** stride 4–5 + equalize aug, one retrain | prep + 4 h | does z-context cut end error; case for 3D | **Running.** Prep done (posonly=9,516 vs v2's 9,512 — population matches). Training submitted to BigRed, `run_v7_p4`. |
+| 8 | **P2** negatives adjacent+notch, new dir, one retrain | prep + 4 h | halluc drop, +0.02–0.03 | **Running.** Same prep as step 7 (withneg=13,840 = 9,516 pos + 4,324 neg). Training submitted to BigRed, `run_v7_p2`, in parallel with step 7. |
+| 9 | **P1** sampler cap, one retrain | 4 h | closes exposure question | **Running.** Submitted to BigRed, `run_v7_p1`, epochs=100 per the doc's own caveat. Independent of steps 7/8's prep — uses segmentation_data_v2 unchanged. |
 | 10 | Weight avg + flip TTA | 30 min | +0.01–0.02 free | Pending |
 | 11 | 3D nnU-Net (FMed) if P4 helps | days | arch that sees the ends | Pending |
 | 12 | **P3** stopping rule + GT end cleanup on 13 training pts, one retrain — **only if 4A2 says the cliff is habit** | annotation + 4 h | label half of the end error, 0–0.03 | **Blocked** (step 1 parked) |
