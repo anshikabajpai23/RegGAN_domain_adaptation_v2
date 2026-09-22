@@ -346,6 +346,11 @@
     <a href="#s12">v12 — New Ablations</a>
   </div>
   <div class="nav-group">
+    <div class="nav-label">Phase 4</div>
+    <a href="#p4checks">Debugging Checks</a>
+    <a href="#p4approaches">Candidate Approaches</a>
+  </div>
+  <div class="nav-group">
     <div class="nav-label">Reference</div>
     <a href="#inference">Inference Table</a>
     <a href="#summary">Key Differences</a>
@@ -361,7 +366,7 @@
     <div class="eyebrow">RegGAN Domain Adaptation · BigRed200</div>
     <h1>Experiment Version Log</h1>
     <div class="doc-meta">
-      <span class="meta"><strong>Updated</strong> 2026-08-31</span>
+      <span class="meta"><strong>Updated</strong> 2026-09-12</span>
       <span class="meta"><strong>BigRed base</strong> /N/project/prostate_cancer_ai/anshika/regGAN/</span>
       <span class="meta"><strong>Local base</strong> ~/Desktop/github/RegGAN_domain_adaptation_v2/</span>
     </div>
@@ -610,6 +615,102 @@
       </table>
     </div>
     <div class="note"><strong>Rationale:</strong> v3 ablations were unfair because they used fake PD only — the setup that maxes out at 0.695. Now testing the same ideas on the v7_mixed setup (real PD + fake PD), which maxes out at 0.781. The question is whether these loss/aug choices add value on top of real PD labels.</div>
+  </div>
+
+  <!-- 9. Phase 4 -->
+  <div class="section" id="p4checks">
+    <h2>9. Phase 4 — Debugging Checks</h2>
+    <p>Diagnostic checks run against <code>run_v7_replica_seed42</code> (17pt Dice 0.7780, the Phase 4 baseline) before deciding which fixes were worth retraining for.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>#</th><th>Check</th><th>Finding</th><th>Led to</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Error location</td><td>Core at ceiling (0.84); error concentrated at slice-axis ends. Cohort-wide FN 47%, hallucination 17%.</td><td>P2 + P4</td></tr>
+          <tr><td>2</td><td>Neighbor slices</td><td>Model has no learned z-context — wider fixed-position neighbors hurt 17/17 patients.</td><td>P4, sequence</td></tr>
+          <tr><td>3</td><td>Real-PD repeats</td><td>21.6×/epoch, 562 by best epoch. Capping it (P1) dropped val Dice −0.0380, above noise — repeats are useful signal, not memorization.</td><td>Ruled out P1</td></tr>
+          <tr><td>4A</td><td>Label stopping</td><td>Cliff at outer end (0.93 Dice), ramp at inner end (0.39) — no consistent stopping rule across the 15 training patients.</td><td>Informs P3 (parked)</td></tr>
+          <tr><td>5</td><td>Seed noise</td><td>Seed-42 vs seed-7, same script: per-patient max |Δ| = 0.0226, mean |Δ| = 0.0129. This is the noise floor every result below is judged against.</td><td>Judging threshold for all approaches</td></tr>
+          <tr><td>Split</td><td>In-plane component split</td><td>Connected-component fragmentation is only 0.6% of real-PD core error (cc match 26/30) — not the main failure mode on real PD.</td><td>Deprioritized crop's original rationale</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Noise floor = 0.0226.</strong> Every candidate approach below is judged against this same per-patient threshold, applied consistently even to the biggest-looking gains.</div>
+  </div>
+
+  <div class="section" id="p4approaches">
+    <h2>Phase 4 — Candidate Approaches (Tried / In Progress)</h2>
+    <p>All start from the same untrained 5-class DESS baseline via the same base recipe, one change at a time, compared against <code>run_v7_replica_seed42</code> = <span class="dice hi" style="font-size:13px">0.7780</span> on the 17-patient test set. Only approaches actually run are listed — parked, dropped, or not-yet-tried ideas are tracked separately in <code>docs/phase4_results.md</code>.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Approach</th><th>Key change</th><th>17pt Test Dice</th><th>Δ vs replica</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>P4 — stride + aug</td>
+            <td>Fake-PD stride 4–5 (wider z-context) + equalized brightness/noise aug</td>
+            <td><span class="dice mid">0.7856</span></td>
+            <td class="mono">+0.0076</td>
+            <td><span class="chip chip-done">Done</span> No real improvement — below noise floor, shrank vs the 2-patient read</td>
+          </tr>
+          <tr>
+            <td>P2 — negatives</td>
+            <td>Adjacent + notch negative slices added to fake-PD training index</td>
+            <td><span class="dice mid">0.7795</span></td>
+            <td class="mono">+0.0015</td>
+            <td><span class="chip chip-done">Done</span> No real improvement — essentially nothing</td>
+          </tr>
+          <tr>
+            <td>P1 — sampler cap</td>
+            <td>Capped real-PD repeats to match fake-PD batch count per epoch (removes the 21.6× oversampling from check 3)</td>
+            <td><span class="dice lo">0.7489</span></td>
+            <td class="mono" style="color:var(--d-lo)">−0.0291</td>
+            <td><span class="chip chip-done">Done</span> Confirmed real harm — above noise floor</td>
+          </tr>
+          <tr>
+            <td>Weight averaging</td>
+            <td>Mean of <code>ckpt_best</code> + <code>ckpt_latest</code> state dicts, inference only</td>
+            <td class="na">—</td>
+            <td class="mono">+0.0034 (2-val-pt)</td>
+            <td><span class="chip chip-done">Done</span> Negligible — checkpoint averaging isn't doing anything here</td>
+          </tr>
+          <tr>
+            <td>Flip TTA</td>
+            <td>4-way flip-averaged softmax at inference, no retraining</td>
+            <td class="na">—</td>
+            <td class="mono">+0.0175 (2-val-pt)</td>
+            <td><span class="chip chip-done">Done</span> Suggestive small free gain, below floor — apply for free upside on any checkpoint</td>
+          </tr>
+          <tr>
+            <td>Crop / localize</td>
+            <td>Fixed bounding box from training GT extent, cropped + resized to 384×384 (P5)</td>
+            <td><span class="dice hi">0.7910</span></td>
+            <td class="mono">+0.0130</td>
+            <td><span class="chip chip-done">Done</span> Largest gain besides sequence; below floor, not yet confirmed</td>
+          </tr>
+          <tr>
+            <td>K-fold (5 folds)</td>
+            <td>5-fold CV over the 15 real-PD patients, read on the 17pt test set</td>
+            <td><span class="dice mid">0.7776</span> mean (0.7723–0.7827)</td>
+            <td class="mono">≤0.0057</td>
+            <td><span class="chip chip-done">Done</span> All 5 folds within noise floor — split choice barely matters; seed noise dominates run-to-run variance</td>
+          </tr>
+          <tr>
+            <td>Sequence (ConvLSTM)</td>
+            <td>5-slice window, each slice encoded separately, learned ConvLSTM aggregation at the bottleneck only</td>
+            <td><span class="dice hi">0.7958</span></td>
+            <td class="mono">+0.0178</td>
+            <td><span class="chip chip-done">Done</span> Largest single-change gain in Phase 4; below floor, not yet confirmed</td>
+          </tr>
+          <tr>
+            <td>Crop + Sequence (combined)</td>
+            <td>Sequence architecture trained on the already-cropped data — tests whether the two largest gains stack or overlap</td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td><span class="chip chip-wip">Running</span> Training on BigRed (<code>run_v7_crop_sequence</code>)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Only P1 is confirmed real</strong> (and it's harmful). Crop (+0.0130) and Sequence (+0.0178) are the two biggest gains seen — both bigger than the already-rejected P4 — but neither individually clears the 0.0226 floor by the same standard applied to reject P4/P2. They're the leading candidates for a confirmatory repeat-seed run.</div>
   </div>
 
   <!-- 5. Inference Table -->
