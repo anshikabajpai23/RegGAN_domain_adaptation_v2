@@ -1,24 +1,29 @@
 """
-infer_sequence_v3.py
-=====================
-Inference for the slice-sequence architecture (sequence_model.py). Cannot
-reuse infer_real_pd_v3.py -- that builds a standard smp.Unet expecting a
-fixed 3 or 5-channel 2.5D stack; the sequence model is a different class
-(SequenceUNet) taking (B, T, H, W) and internally running T separate encoder
-passes + a ConvLSTM aggregation. Same volume preprocessing, affine logic,
-and --tta flip-averaging as infer_real_pd_v3.py -- reused directly, not
-reimplemented, so both scripts share the SAME verified LPS->RAS affine and
-percentile-normalisation path. Only the windowing (5 slices, not 3) and the
-model call differ.
+infer_sequence_v3_crop.py
+==========================
+Inference for the combined crop + slice-sequence checkpoint
+(run_v7_crop_sequence). Merges infer_sequence_v3.py's 5-slice ConvLSTM
+model call with infer_real_pd_v3_crop.py's crop-up/predict/downsize-place
+round trip -- same box (loaded from --box_json, must be the exact file
+compute_and_apply_fixed_crop.py produced, same one run_v7_crop used) applied
+to EACH of the 5 offset slices before stacking, matching how
+finetune_v7_crop_sequence.sh's training data was built (crop+resize applied
+per-slice at data-prep time, then the standard 5-slice window taken over
+already-cropped slices).
+
+Everything else -- preprocessing, edge clamping, affine -- identical to
+infer_real_pd_v3.py / infer_sequence_v3.py, reused not reimplemented.
 
 Usage:
-    python segmentation/infer_sequence_v3.py \
+    python segmentation/infer_sequence_v3_crop.py \
         --pd_root   /N/.../pd-files \
         --filenames AC0D5A4D78B628_SAG_PD_TSE_6.nii.gz ... \
-        --ckpt      /N/.../segmentation_runs/run_v7_sequence/ckpt_best.pth \
-        --out_dir   /N/.../results/real_pd_predictions_sequence_17pt
+        --ckpt      /N/.../segmentation_runs/run_v7_crop_sequence/ckpt_best.pth \
+        --box_json  /N/.../crop_box.json \
+        --out_dir   /N/.../results/real_pd_predictions_crop_sequence_17pt
 """
 import argparse
+import json
 import logging
 import os
 import sys
@@ -26,6 +31,7 @@ import sys
 import numpy as np
 import nibabel as nib
 import torch
+from scipy.ndimage import zoom
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,24 +45,33 @@ log = logging.getLogger(__name__)
 OFFSETS = (-2, -1, 0, 1, 2)   # matches dataset_sequence.py's OFFSETS exactly
 
 
-def predict_volume(vol, model, device, batch_size=8, tta=False):
-    """vol: (n_slices, 384, 384) float32 in [0,1]. Returns (n_slices, 384, 384) int64.
-    Same edge-clamp convention as infer_real_pd_v3.py: max(0, min(n-1, idx+o))."""
+def crop_up(img2d, box, target_size=(384, 384)):
+    y0, y1, x0, x1 = box
+    crop = img2d[y0:y1, x0:x1]
+    scale = (target_size[0] / crop.shape[0], target_size[1] / crop.shape[1])
+    return zoom(crop, scale, order=3)
+
+
+def predict_volume_crop_seq(vol, model, device, box, batch_size=8, tta=False):
+    """vol: (n_slices, 384, 384) float32 in [0,1]. Returns (n_slices, 384, 384)
+    int64, predictions placed back at the box location, zero elsewhere."""
     n = vol.shape[0]
-    preds = np.zeros((n, vol.shape[1], vol.shape[2]), dtype=np.int64)
+    H, W = vol.shape[1], vol.shape[2]
+    preds = np.zeros((n, H, W), dtype=np.int64)
+    y0, y1, x0, x1 = box
+    crop_h, crop_w = y1 - y0, x1 - x0
 
     with torch.no_grad():
         for start in range(0, n, batch_size):
             end = min(start + batch_size, n)
             batch_stacks = []
             for idx in range(start, end):
-                stack = [vol[max(0, min(n - 1, idx + o))] for o in OFFSETS]
-                batch_stacks.append(np.stack(stack, axis=0))   # (5, H, W)
-            x = torch.from_numpy(np.stack(batch_stacks, axis=0)).float().to(device)  # (B,5,H,W)
+                stack = [crop_up(vol[max(0, min(n - 1, idx + o))], box) for o in OFFSETS]
+                batch_stacks.append(np.stack(stack, axis=0))   # (5, 384, 384) in crop space
+            x = torch.from_numpy(np.stack(batch_stacks, axis=0)).float().to(device)  # (B,5,384,384)
 
             if not tta:
-                out = model(x)
-                preds[start:end] = out.argmax(dim=1).cpu().numpy()
+                out = model(x).argmax(dim=1).cpu().numpy()   # (B, 384, 384) in crop space
             else:
                 variants = [(), (-1,), (-2,), (-2, -1)]
                 prob_sum = None
@@ -65,7 +80,12 @@ def predict_volume(vol, model, device, batch_size=8, tta=False):
                     p = torch.softmax(model(xv), dim=1)
                     p = torch.flip(p, dims) if dims else p
                     prob_sum = p if prob_sum is None else prob_sum + p
-                preds[start:end] = (prob_sum / len(variants)).argmax(dim=1).cpu().numpy()
+                out = (prob_sum / len(variants)).argmax(dim=1).cpu().numpy()
+
+            for b, idx in enumerate(range(start, end)):
+                pred_crop_size = zoom(out[b].astype(np.float32), (crop_h / 384, crop_w / 384),
+                                      order=0).astype(np.int64)
+                preds[idx, y0:y1, x0:x1] = pred_crop_size
 
     return preds
 
@@ -75,10 +95,19 @@ def main():
     ap.add_argument("--pd_root",    required=True)
     ap.add_argument("--filenames",  nargs="+", required=True)
     ap.add_argument("--ckpt",       required=True)
+    ap.add_argument("--box_json",   required=True,
+                    help="JSON saved by compute_and_apply_fixed_crop.py -- MUST be the "
+                         "exact box run_v7_crop_sequence was trained on")
     ap.add_argument("--out_dir",    required=True)
     ap.add_argument("--batch_size", type=int, default=8)
     ap.add_argument("--tta", action="store_true")
     args = ap.parse_args()
+
+    with open(args.box_json) as fh:
+        box_data = json.load(fh)
+    box = (box_data["y0"], box_data["y1"], box_data["x0"], box_data["x1"])
+    log.info(f"Loaded crop box from {args.box_json}: {box}  "
+             f"(size {box[1]-box[0]}x{box[3]-box[2]}, padding={box_data.get('padding')})")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info(f"Device: {device}  |  offsets: {OFFSETS}  |  tta: {args.tta}")
@@ -97,7 +126,7 @@ def main():
 
         log.info(f"Processing {fname} ...")
         vol = process_volume(path, "PD")
-        preds = predict_volume(vol, model, device, args.batch_size, tta=args.tta)
+        preds = predict_volume_crop_seq(vol, model, device, box, args.batch_size, tta=args.tta)
 
         n_meniscus = int((preds > 0).any(axis=(1, 2)).sum())
         log.info(f"  {fname}: {vol.shape[0]} slices, {n_meniscus} with meniscus, "

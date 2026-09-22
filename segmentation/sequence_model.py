@@ -115,11 +115,20 @@ class SequenceUNet(nn.Module):
 
 
 def build_sequence_model(ckpt_path, device, pretrained_n_classes=5, n_classes=3):
-    """Loads baseline_best_model.pth into a standard 3-class-headed smp.Unet
-    (same as every other Phase 4 build_model()), then wraps it for sequence
-    processing. Bottleneck channel count (512) matches resnet34's standard
-    smp encoder output -- verify this against the actual model if the
-    encoder ever changes."""
+    """TRAINING-TIME constructor. Loads baseline_best_model.pth -- the UNTRAINED
+    5-class DESS checkpoint, a plain smp.Unet with no LSTM -- into a standard
+    3-class-headed smp.Unet (same as every other Phase 4 build_model()), then
+    wraps it for sequence processing. Bottleneck channel count (512) matches
+    resnet34's standard smp encoder output -- verify this against the actual
+    model if the encoder ever changes.
+
+    Do NOT use this to load an already-trained run_v7_sequence/ckpt_best.pth --
+    that checkpoint's state_dict is the full SequenceUNet (3-class head AND
+    lstm.* weights already present), not a plain 5-class Unet. Loading it here
+    fails with "Unexpected key(s): lstm.conv.weight/bias" plus a 3-vs-5 head
+    shape mismatch (confirmed against a real BigRed run, 2026-09-12).
+    Use load_trained_sequence_model() below for that case instead.
+    """
     import segmentation_models_pytorch as smp
 
     base = smp.Unet(encoder_name="resnet34", encoder_weights=None,
@@ -133,4 +142,21 @@ def build_sequence_model(ckpt_path, device, pretrained_n_classes=5, n_classes=3)
         kernel_size=old_head.kernel_size, stride=old_head.stride, padding=old_head.padding)
 
     model = SequenceUNet(base, bottleneck_channels=512)
+    return model.to(device)
+
+
+def load_trained_sequence_model(ckpt_path, device, n_classes=3):
+    """INFERENCE-TIME loader for an already-trained run_v7_sequence/ckpt_best.pth.
+    Builds the SequenceUNet shape directly with the FINAL head size (n_classes),
+    then loads the full state_dict (3-class head + lstm.* weights already
+    present) into the wrapped model itself -- not into a bare smp.Unet the way
+    build_sequence_model() does for the untrained baseline case above."""
+    import segmentation_models_pytorch as smp
+
+    base = smp.Unet(encoder_name="resnet34", encoder_weights=None,
+                    in_channels=3, classes=n_classes)
+    model = SequenceUNet(base, bottleneck_channels=512)
+
+    state = torch.load(ckpt_path, map_location=device)
+    model.load_state_dict(state)
     return model.to(device)
