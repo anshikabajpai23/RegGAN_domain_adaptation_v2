@@ -1,36 +1,33 @@
 """
-finetune_meniscus_v7_crop_seq_d.py
-===================================
-Phase 5, D — position-conditioned shape prior (area), on the crop+sequence base.
+finetune_meniscus_v7_replica_d.py
+====================================
+Phase 5, D — position-conditioned shape (area) prior, on the PLAIN 2.5D
+replica base (independent of crop+sequence). Diffs directly against
+run_v7_replica_seed42, exactly like P1/P2/P4 did.
 
-BASE (unchanged from run_v7_crop_sequence): same pretrained/baseline_best_model.pth,
-same SequenceUNet + ConvLSTM, same cropped data, same losses/optimizer/LR/seed/
-epochs/patience, same history.csv schema.
+BASE: everything from finetune_meniscus_v7_replica.py is copied verbatim
+(build_model(), the plain smp.Unet architecture, eval/dump helpers) except the
+loss, which gets + lam * L_area, and the two dataset classes, which are thin
+subclasses adding a `bin` field (not a rewrite).
 
-THE ONE CHANGE: + lam * L_area, where L_area penalises the predicted soft area
-for deviating from the expected area at that slice's WITHIN-SPAN position:
+REUSES area_loss() and calibrate_lambda() from finetune_meniscus_v7_crop_seq_d.py
+by import rather than duplicating them: both are already architecture-agnostic
+(they call model(x) with a single positional argument and operate on logits
+only), so there is no reason to fork them for the plain-Unet case. Only this
+file's model construction, dataset wiring, and run_epoch differ.
 
-    L_area = mean over valid samples of ((area_pred - A_mean[bin]) / (A_std[bin] + 1))^2
+THE SHAPE PRIOR MUST BE REBUILT ON UNCROPPED MASKS for this experiment
+(scripts/build_shape_prior.py --data_root segmentation_data_v2 / real_pd_seg_data_v7,
+NOT the _crop directories) -- the crop+sequence D run used a prior built from
+CROPPED masks specifically because that model predicts in cropped (magnified)
+space. This model predicts in the ORIGINAL uncropped space, so it needs its own,
+separately-built prior or every area target would be off by the crop's ~2.5x
+magnification factor.
 
-A_mean/A_std come from scripts/build_shape_prior.py, built on the CROPPED masks
-(the crop magnifies area ~2.5x, so an uncropped template would push the model to
-under-segment by that factor).
-
-TRAINING-TIME ONLY, and that is a hard constraint, not a choice (doc §4.2): the
-bin is derived from GT spans, which do not exist at inference. So this is a
-regulariser that shapes training; the trained model is used normally afterwards.
-
-SEPARATE TEMPLATES PER COHORT. Fake (0.8 mm DESS-derived) and real (3.6 mm)
-capture different tissue thickness per slice, so their apparent areas differ.
-Each branch is regularised against its own template rather than a pooled one.
-
-SAMPLES WITHOUT A BIN CONTRIBUTE NOTHING: empty-GT slices, and patients whose
-notch was labelled through (single span, so the notch end is unidentifiable and
-was excluded from the template). They are dropped from the mean rather than
-defaulted, so the term never speaks where it has no reference.
-
-WATCH area_tr / area_frac in history.csv. Doc §4.4 requires the term to stay
-under ~10% of the base loss; if area_frac climbs well past that, lam is too high.
+lam is CALIBRATED IN-JOB (never hardcoded) -- this is the exact bug that
+collapsed the first crop+sequence D attempt (see docs/phase5_implementation_ideas.md
+and the fix history in finetune_meniscus_v7_crop_seq_d.py). Do not reintroduce
+a hardcoded default here.
 """
 import argparse
 import csv
@@ -43,12 +40,13 @@ import sys
 import numpy as np
 import torch
 import torch.nn as nn
+import segmentation_models_pytorch as smp
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from dataset_sequence import SequenceMeniscusDataset, SequenceRealPDDataset
-from sequence_model import build_sequence_model
-from rim_loss import meniscus_prob          # reused: identical lat+med probability
+from dataset_2_5d_v2 import Meniscus2_5DDataset
+from dataset_2_5d_realpd import RealPDDataset
+from finetune_meniscus_v7_crop_seq_d import area_loss, calibrate_lambda  # reused, not reimplemented
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -67,20 +65,31 @@ def set_seed(seed):
     log.info(f"Seed fixed: {seed} (cudnn.deterministic=True)")
 
 
-class BinnedSequenceMeniscusDataset(SequenceMeniscusDataset):
-    """Base behaviour + the within-span bin for this slice (NO_BIN if it has none)."""
+def build_model(ckpt_path, device):
+    """Verbatim from finetune_meniscus_v7_replica.py."""
+    model = smp.Unet(encoder_name="resnet34", encoder_weights=None,
+                     in_channels=3, classes=PRETRAINED_N_CLASSES)
+    model.load_state_dict(torch.load(ckpt_path, map_location=device))
+    log.info(f"Loaded DESS baseline from {ckpt_path}")
+    old_head = model.segmentation_head[0]
+    model.segmentation_head[0] = nn.Conv2d(
+        old_head.in_channels, N_CLASSES,
+        kernel_size=old_head.kernel_size, stride=old_head.stride, padding=old_head.padding)
+    return model.to(device)
+
+
+class BinnedMeniscus2_5DDataset(Meniscus2_5DDataset):
     def __init__(self, img_root, mask_root, bin_map, augment=False):
         super().__init__(img_root, mask_root, augment=augment)
         self.bin_map = bin_map or {}
 
     def __getitem__(self, i):
         item = super().__getitem__(i)
-        pid, idx = self.items[i]
-        item["bin"] = int(self.bin_map.get(pid, {}).get(str(idx), NO_BIN))
+        item["bin"] = int(self.bin_map.get(item["patient_id"], {}).get(str(item["slice_idx"]), NO_BIN))
         return item
 
 
-class BinnedSequenceRealPDDataset(SequenceRealPDDataset):
+class BinnedRealPDDataset(RealPDDataset):
     def __init__(self, img_root, mask_root, bin_map, augment=False):
         super().__init__(img_root, mask_root, augment=augment)
         self.bin_map = bin_map or {}
@@ -92,21 +101,6 @@ class BinnedSequenceRealPDDataset(SequenceRealPDDataset):
         return item
 
 
-def area_loss(logits, bins, a_mean, a_std):
-    """bins (B,) long, NO_BIN where the slice has no reference.
-    a_mean/a_std: (K,) tensors on the same device."""
-    valid = bins >= 0
-    if not bool(valid.any()):
-        return logits.sum() * 0.0          # keeps the graph, contributes nothing
-
-    area_pred = meniscus_prob(logits).sum(dim=(1, 2))          # soft area, (B,)
-    b = bins.clamp(min=0)
-    tgt = a_mean[b]
-    sd = a_std[b] + 1.0                                        # doc §4.4: +1 guards std=0
-    per_sample = ((area_pred - tgt) / sd).pow(2) * valid.float()
-    return per_sample.sum() / valid.float().sum().clamp(min=1.0)
-
-
 class MergedLoss(nn.Module):
     def __init__(self, w_bg=0.1, w_men=1.5, eps=1e-6):
         super().__init__(); self.w_bg, self.w_men, self.eps = w_bg, w_men, eps
@@ -115,8 +109,8 @@ class MergedLoss(nn.Module):
         probs = torch.softmax(logits, dim=1)
         p_bg = probs[:, 0]; p_men = probs[:, 1] + probs[:, 2]
         gt_men = (binary_masks > 0).float(); gt_bg = (binary_masks == 0).float()
-        ce = -(self.w_bg * gt_bg * torch.log(p_bg.clamp(min=self.eps)) +
-               self.w_men * gt_men * torch.log(p_men.clamp(min=self.eps))).mean()
+        ce = -(self.w_bg * gt_bg * torch.log(p_bg.clamp(self.eps)) +
+               self.w_men * gt_men * torch.log(p_men.clamp(self.eps))).mean()
         tp = (p_men * gt_men).sum()
         dice = 1.0 - (2 * tp + self.eps) / (p_men.sum() + gt_men.sum() + self.eps)
         return ce + dice
@@ -180,6 +174,10 @@ def run_epoch(model, real_loader, fake_loader, optimizer, merged_loss_fn, fake_l
     return total / n, dice_sum / n, dice_fake_sum / n, area_sum / n, base_sum / n
 
 
+def fake_loss_fn_factory(class_weights):
+    return lambda logits, y: (nn.CrossEntropyLoss(weight=class_weights)(logits, y) + SoftDiceLoss()(logits, y))
+
+
 @torch.no_grad()
 def eval_real_per_patient(model, dataset, device, batch_size=8):
     model.eval(); acc = {}
@@ -216,7 +214,7 @@ def dump_val_predictions(model, dataset, device, out_dir, batch_size=8):
         for b, stem in enumerate(stems):
             pid, sidx = stem.rsplit("_", 1)
             vols.setdefault(pid, {})[int(sidx)] = (
-                x[b, 2].cpu().numpy().astype(np.float32),
+                x[b, 1].cpu().numpy().astype(np.float32),
                 y[b].numpy().astype(np.int16), pred[b].numpy().astype(np.int16))
     affine = np.diag([PD_SPACING[0], PD_SPACING[1], PD_SPACING[2], 1.0]).astype(np.float32)
     csv_path = os.path.join(out_dir, "per_slice_dice.csv"); eps = 1e-6
@@ -247,51 +245,9 @@ def load_prior(path, device, name):
     a_mean = torch.tensor(blob["area_mean"], dtype=torch.float32, device=device)
     a_std = torch.tensor(blob["area_std"], dtype=torch.float32, device=device)
     log.info(f"  {name} prior: {m['bins']} bins, {m['n_patients_used']} patients, "
-             f"{m['n_slices']} slices, {m['n_skipped_single_span']} skipped (single span)")
-    log.info(f"    area mean by bin (outer->notch): "
-             f"{[round(float(v)) for v in a_mean.tolist()]}")
+             f"{m['n_slices']} slices, {m['n_skipped_single_span']} skipped (single span), "
+             f"built from {m['data_root']}")
     return (a_mean, a_std), blob["bin_map"]
-
-
-@torch.no_grad()
-def calibrate_lambda(model, real_loader, fake_loader, merged_loss_fn, fake_loss_fn,
-                     prior_f, prior_r, device, target_frac, n_batches):
-    """Same pattern as G2's calibrate_lambda -- measured, not guessed. Existing
-    for exactly the reason it exists in G2: a hardcoded lam is wrong whenever the
-    loss's natural scale isn't known in advance, and here it collapsed a run.
-    At step 0 the freshly re-headed segmentation classifier is near-uniform, so
-    predicted area is enormous relative to the prior's targets; measuring this
-    before training starts is the only way to pick a lam that doesn't dominate."""
-    model.eval()
-    real_iter = iter(real_loader)
-    base_tot, area_tot, n = 0.0, 0.0, 0
-    for fake_batch in fake_loader:
-        if n >= n_batches:
-            break
-        xf, yf = fake_batch["image"].to(device), fake_batch["mask"].to(device)
-        bf = fake_batch["bin"].to(device)
-        logits_f = model(xf)
-        try:
-            real_batch = next(real_iter)
-        except StopIteration:
-            real_iter = iter(real_loader); real_batch = next(real_iter)
-        xr, yr = real_batch["image"].to(device), real_batch["mask"].to(device)
-        br = real_batch["bin"].to(device)
-        logits_r = model(xr)
-
-        base_tot += (fake_loss_fn(logits_f, yf) + merged_loss_fn(logits_r, yr)).item()
-        area_tot += float(area_loss(logits_f, bf, *prior_f) + area_loss(logits_r, br, *prior_r))
-        n += 1
-
-    if n == 0 or area_tot <= 1e-9:
-        log.warning("Area loss is ~0 at init: unusual, falling back to lam=0.01.")
-        return 0.01, base_tot / max(n, 1), area_tot / max(n, 1)
-    base_mean, area_mean = base_tot / n, area_tot / n
-    lam = target_frac * base_mean / area_mean
-    log.info(f"  calibration: base={base_mean:.4f}  area={area_mean:.4f}  "
-             f"(uncalibrated area_frac at lam=0.01 would have been "
-             f"{0.01 * area_mean / base_mean:.1%})")
-    return lam, base_mean, area_mean
 
 
 def main():
@@ -299,18 +255,12 @@ def main():
     ap.add_argument("--pretrained_ckpt", required=True)
     ap.add_argument("--fake_data_root", required=True)
     ap.add_argument("--real_data_root", required=True)
-    ap.add_argument("--shape_prior_fake", required=True)
+    ap.add_argument("--shape_prior_fake", required=True,
+                    help="MUST be built from UNCROPPED masks -- see module docstring")
     ap.add_argument("--shape_prior_real", required=True)
     ap.add_argument("--out_dir", required=True)
-    ap.add_argument("--lam", type=float, default=None,
-                    help="explicit; otherwise calibrated (see calibrate_lambda below). "
-                         "A hardcoded default here caused a full training collapse on "
-                         "2026-09-22: the freshly re-headed segmentation classifier starts "
-                         "near-uniform, giving an initial predicted area of ~98,000 px "
-                         "against a target of ~1,340, which at lam=0.01 overwhelmed the "
-                         "base loss from epoch 0 and collapsed the model to all-background.")
-    ap.add_argument("--lam_target_frac", type=float, default=0.07,
-                    help="area term as a fraction of base loss at init (doc says < 0.10)")
+    ap.add_argument("--lam", type=float, default=None, help="explicit; otherwise calibrated")
+    ap.add_argument("--lam_target_frac", type=float, default=0.07)
     ap.add_argument("--calib_batches", type=int, default=20)
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--batch_size", type=int, default=8)
@@ -324,25 +274,23 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log.info(f"Device: {device}  |  LR: {args.lr} -> 1e-8  |  D: position-conditioned area prior")
+    log.info(f"Device: {device}  |  LR: {args.lr} -> 1e-8  |  D: area prior, PLAIN 2.5D, uncropped")
 
     prior_f, binmap_f = load_prior(args.shape_prior_fake, device, "fake")
     prior_r, binmap_r = load_prior(args.shape_prior_real, device, "real")
 
-    model = build_sequence_model(args.pretrained_ckpt, device,
-                                 pretrained_n_classes=PRETRAINED_N_CLASSES, n_classes=N_CLASSES)
-    log.info(f"Loaded DESS baseline from {args.pretrained_ckpt}, wrapped with SequenceUNet")
+    model = build_model(args.pretrained_ckpt, device)
 
-    fake_train = BinnedSequenceMeniscusDataset(
+    fake_train = BinnedMeniscus2_5DDataset(
         os.path.join(args.fake_data_root, "train", "images"),
         os.path.join(args.fake_data_root, "train", "masks"), binmap_f, augment=True)
-    fake_val = BinnedSequenceMeniscusDataset(
+    fake_val = BinnedMeniscus2_5DDataset(
         os.path.join(args.fake_data_root, "val", "images"),
         os.path.join(args.fake_data_root, "val", "masks"), binmap_f, augment=False)
-    real_train = BinnedSequenceRealPDDataset(
+    real_train = BinnedRealPDDataset(
         os.path.join(args.real_data_root, "train", "images"),
         os.path.join(args.real_data_root, "train", "masks"), binmap_r, augment=True)
-    real_val = BinnedSequenceRealPDDataset(
+    real_val = BinnedRealPDDataset(
         os.path.join(args.real_data_root, "val", "images"),
         os.path.join(args.real_data_root, "val", "masks"), binmap_r, augment=False)
 
@@ -350,8 +298,7 @@ def main():
     log.info(f"Real PD — train: {len(real_train)} slices  |  val: {len(real_val)} slices")
     cov_f = np.mean([fake_train[i]["bin"] >= 0 for i in range(0, min(len(fake_train), 400), 7)])
     cov_r = np.mean([real_train[i]["bin"] >= 0 for i in range(0, min(len(real_train), 400), 7)])
-    log.info(f"  samples WITH a bin (the prior only speaks on these): "
-             f"fake {cov_f:.1%}, real {cov_r:.1%}")
+    log.info(f"  samples WITH a bin: fake {cov_f:.1%}, real {cov_r:.1%}")
 
     fake_train_loader = DataLoader(fake_train, args.batch_size, shuffle=True, num_workers=args.num_workers)
     fake_val_loader = DataLoader(fake_val, args.batch_size, shuffle=False, num_workers=args.num_workers)
@@ -361,8 +308,8 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-8)
 
-    weights = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
-    fake_loss_fn = lambda logits, y: (nn.CrossEntropyLoss(weight=weights)(logits, y) + SoftDiceLoss()(logits, y))
+    class_weights = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
+    fake_loss_fn = fake_loss_fn_factory(class_weights)
     merged_loss_fn = MergedLoss(w_bg=0.1, w_men=1.5)
 
     if args.lam is None:
@@ -406,8 +353,7 @@ def main():
                  f"dice_fake tr={tdf:.4f} va={vdf:.4f}  |  area tr={area_tr:.3f} frac={area_frac:.3f}")
         log.info(f"           per-patient val (clean pass): mean={pp_mean:.4f}   {pp_str}")
         if epoch == 0 and area_frac > 0.10:
-            log.warning(f"area term is {area_frac:.1%} of base loss at epoch 0; doc §4.4 wants "
-                        f"< 10%. Consider lowering --lam.")
+            log.warning(f"area term is {area_frac:.1%} of base loss at epoch 0; consider lowering --lam.")
 
         hist.writerow([epoch, f"{lr:.3e}", f"{tl:.5f}", f"{vl:.5f}", f"{td:.5f}", f"{vd:.5f}", f"{td - vd:+.5f}",
                        f"{tdf:.5f}", f"{vdf:.5f}", f"{pp_mean:.5f}"]
