@@ -1,0 +1,444 @@
+"""
+finetune_meniscus_v7_replica_a3_v2.py
+======================================
+Phase 5, A3 **v2** — slice-position weighted loss, PLAIN 2.5D replica base.
+
+WHY v2 EXISTS
+-------------
+v1 (finetune_meniscus_v7_replica_a3.py, and the crop+sequence A3 too) did NOT
+reproduce the replica loss at --variant none, so "A3-up vs replica" was never a
+single change. Two separate effects were stacked on top of the position
+weighting:
+
+  1. CE NORMALISATION BUG (fixed here). v1 computed the fake-PD CE as
+         F.cross_entropy(..., reduction="none").mean(dim=(1,2))
+     which divides by PIXEL COUNT. But replica uses nn.CrossEntropyLoss(weight=w),
+     which divides by the SUM OF CLASS WEIGHTS. With w=[0.1,1.5,1.5] on ~1%
+     meniscus that denominator is ~0.12, so v1's CE came out ~8.3x too small and
+     the CE:Dice balance silently shifted from ~58% CE to ~14% CE. Measured:
+         replica CE        = 0.000731
+         v1 CE             = 0.000088   (0.120x)
+         v2 CE (this file) = 0.000731   (1.000x)  <- exact match restored
+
+  2. PER-SAMPLE vs BATCH DICE (NOT fixed here -- cannot be). Weighting requires
+     a per-sample loss, but replica's SoftDice/MergedLoss Dice are reduced over
+     the WHOLE BATCH. Per-sample Dice charges every empty-GT slice a flat 1.0
+     no matter what, whereas batch Dice folds it gently into the denominator.
+     On a well-fitting model that is a 14.5x difference:
+         replica (batch)      = 0.027
+         per-sample mean      = 0.386
+         per-sample values    = [0.017 x5, 1.0, 1.0, 1.0]  <- trailing = empty GT
+     Empty-GT slices really do occur here (rim_loss.py's min_area guard exists
+     for exactly them), so this is live, not hypothetical.
+
+     There is no way to make per-sample Dice equal batch Dice. So this residual
+     is MEASURED instead of removed: run --variant none as a control. Then
+         up/down vs none  = the position weighting alone  (the real question)
+         none vs replica  = the reduction change alone    (the residual)
+
+NOTE: MergedLoss (real PD) needed NO fix. Its CE is computed by hand with
+.mean(), so .mean(dim=(1,2)) per sample then averaged is exactly equal to
+replica's .mean() over the batch. Only the fake-PD CE used nn.CrossEntropyLoss
+and therefore only it was mis-normalised.
+
+BASE (unchanged from finetune_meniscus_v7_replica.py): same
+pretrained/baseline_best_model.pth starting checkpoint, same plain smp.Unet
+architecture, same UNCROPPED data (segmentation_data_v2 / real_pd_seg_data_v7),
+same optimizer/LR/seed/epochs/patience, same history.csv schema.
+
+    --variant up    end slices count up to 2x
+    --variant down  end slices count as 0.3x  (Check 4A's predicted winner)
+    --variant none  all weights 1.0  (CONTROL -- REQUIRED for v2 to be
+                    interpretable; it is what absorbs effect 2 above)
+
+v1's runs are NOT superseded-and-deletable: they stay as-is for comparison.
+Use DIFFERENT run dirs (run_2_5d_a3v2_*) so nothing is overwritten.
+
+Compare dice_real_va against run_v7_replica_seed42 (0.7809 val, 0.7780 test)
+AND against the v2 none control, using the 0.0226 noise floor.
+"""
+import argparse
+import csv
+import logging
+import os
+import random
+import sys
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+import segmentation_models_pytorch as smp
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dataset_2_5d_v2 import Meniscus2_5DDataset
+from dataset_2_5d_realpd import RealPDDataset
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+log = logging.getLogger(__name__)
+
+N_CLASSES = 3
+PRETRAINED_N_CLASSES = 5
+PD_SPACING = (3.6, 0.39, 0.39)
+
+
+def set_seed(seed):
+    random.seed(seed); np.random.seed(seed)
+    torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    log.info(f"Seed fixed: {seed} (cudnn.deterministic=True)")
+
+
+def build_model(ckpt_path, device):
+    """Verbatim from finetune_meniscus_v7_replica.py -- must stay identical, or
+    this stops being 'the replica recipe + one change'."""
+    model = smp.Unet(encoder_name="resnet34", encoder_weights=None,
+                     in_channels=3, classes=PRETRAINED_N_CLASSES)
+    model.load_state_dict(torch.load(ckpt_path, map_location=device))
+    log.info(f"Loaded DESS baseline from {ckpt_path}")
+    old_head = model.segmentation_head[0]
+    model.segmentation_head[0] = nn.Conv2d(
+        old_head.in_channels, N_CLASSES,
+        kernel_size=old_head.kernel_size, stride=old_head.stride, padding=old_head.padding)
+    return model.to(device)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Datasets: base behaviour + a per-sample weight. Both plain 2.5D dataset
+# classes already return patient_id/slice-in-stem directly, so this is a much
+# thinner subclass than the crop+sequence A3 script needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WeightedMeniscus2_5DDataset(Meniscus2_5DDataset):
+    def __init__(self, img_root, mask_root, weights, augment=False):
+        super().__init__(img_root, mask_root, augment=augment)
+        self.weights = weights   # {pid: {slice_idx: w}} or None
+
+    def __getitem__(self, i):
+        item = super().__getitem__(i)
+        pid, idx = self.items[i]
+        w = 1.0
+        if self.weights is not None:
+            pw = self.weights.get(pid, {})
+            w = pw.get(str(idx), pw.get(idx, 1.0))
+        item["weight"] = torch.tensor(float(w), dtype=torch.float32)
+        return item
+
+
+class WeightedRealPDDataset(RealPDDataset):
+    def __init__(self, img_root, mask_root, weights, augment=False):
+        super().__init__(img_root, mask_root, augment=augment)
+        self.weights = weights
+
+    def __getitem__(self, i):
+        item = super().__getitem__(i)
+        stem = self.slices[i]
+        pid, sidx = stem.rsplit("_", 1)
+        w = 1.0
+        if self.weights is not None:
+            pw = self.weights.get(pid, {})
+            w = pw.get(str(int(sidx)), pw.get(int(sidx), 1.0))
+        item["weight"] = torch.tensor(float(w), dtype=torch.float32)
+        return item
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Losses: same maths as replica, reduced PER SAMPLE so they can be weighted.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MergedLossPerSample(nn.Module):
+    def __init__(self, w_bg=0.1, w_men=1.5, eps=1e-6):
+        super().__init__(); self.w_bg, self.w_men, self.eps = w_bg, w_men, eps
+
+    def forward(self, logits, binary_masks):
+        probs = torch.softmax(logits, dim=1)
+        p_bg = probs[:, 0]; p_men = probs[:, 1] + probs[:, 2]
+        gt_men = (binary_masks > 0).float(); gt_bg = (binary_masks == 0).float()
+        ce = -(self.w_bg * gt_bg * torch.log(p_bg.clamp(min=self.eps)) +
+               self.w_men * gt_men * torch.log(p_men.clamp(min=self.eps))).mean(dim=(1, 2))
+        tp = (p_men * gt_men).sum(dim=(1, 2))
+        dice = 1.0 - (2 * tp + self.eps) / (p_men.sum(dim=(1, 2)) + gt_men.sum(dim=(1, 2)) + self.eps)
+        return ce + dice
+
+
+class SoftDiceLossPerSample(nn.Module):
+    def __init__(self, n_classes=N_CLASSES, eps=1e-6):
+        super().__init__(); self.n_classes = n_classes; self.eps = eps
+
+    def forward(self, logits, targets):
+        probs = torch.softmax(logits, dim=1); loss = 0.0
+        for c in range(1, self.n_classes):
+            p = probs[:, c]; t = (targets == c).float()
+            inter = (p * t).sum(dim=(1, 2)); den = p.sum(dim=(1, 2)) + t.sum(dim=(1, 2))
+            loss = loss + (1.0 - (2 * inter + self.eps) / (den + self.eps))
+        return loss / (self.n_classes - 1)
+
+
+def weighted_ce_per_sample(logits, y, class_weights, eps=1e-6):
+    """Per-sample equivalent of nn.CrossEntropyLoss(weight=class_weights).
+
+    reduction="none" returns w_c(i) * l_i already multiplied by the class
+    weight, so the ONLY thing needed is the correct denominator: the sum of
+    those class weights, NOT the pixel count. Dividing by pixel count (v1's
+    bug) makes this ~8.3x too small at this class balance.
+    """
+    ce_map = F.cross_entropy(logits, y, weight=class_weights, reduction="none")
+    w_map = class_weights[y]
+    return ce_map.sum(dim=(1, 2)) / w_map.sum(dim=(1, 2)).clamp(min=eps)
+
+
+def fake_loss_per_sample(logits, y, class_weights):
+    return weighted_ce_per_sample(logits, y, class_weights) + SoftDiceLossPerSample()(logits, y)
+
+
+@torch.no_grad()
+def verify_ce_matches_replica(class_weights, device, atol=1e-6):
+    """Refuses to train if the per-sample CE no longer equals replica's CE.
+    This is the exact bug v2 exists to fix, so it is checked, not assumed."""
+    torch.manual_seed(0)
+    B, H, W = 4, 64, 64
+    logits = torch.randn(B, N_CLASSES, H, W, device=device)
+    y = torch.zeros(B, H, W, dtype=torch.long, device=device)
+    y[:, 20:26, 20:30] = 1
+    y[:, 40:45, 35:42] = 2   # ~1% meniscus, same order as the real data
+
+    replica = nn.CrossEntropyLoss(weight=class_weights)(logits, y)
+    mine = weighted_ce_per_sample(logits, y, class_weights).mean()
+    diff = float((replica - mine).abs())
+    return diff < atol, float(replica), float(mine), diff
+
+
+def weighted_mean(per_sample, w):
+    return (per_sample * w).sum() / w.sum().clamp(min=1e-6)
+
+
+def dice_binary(preds, targets, eps=1e-6):
+    pm = (preds > 0).float(); gm = (targets > 0).float()
+    tp = (pm * gm).sum()
+    return float((2 * tp + eps) / (pm.sum() + gm.sum() + eps))
+
+
+def run_epoch(model, real_loader, fake_loader, optimizer, merged_loss_fn, class_weights, device, train=True):
+    model.train() if train else model.eval()
+    total_loss, dice_sum, dice_fake_sum, n = 0.0, 0.0, 0.0, 0
+    real_iter = iter(real_loader)
+
+    with torch.set_grad_enabled(train):
+        for fake_batch in fake_loader:
+            xf, yf = fake_batch["image"].to(device), fake_batch["mask"].to(device)
+            wf = fake_batch["weight"].to(device)
+            logits_f = model(xf)
+            loss_f = weighted_mean(fake_loss_per_sample(logits_f, yf, class_weights), wf)
+
+            try:
+                real_batch = next(real_iter)
+            except StopIteration:
+                real_iter = iter(real_loader); real_batch = next(real_iter)
+            xr, yr = real_batch["image"].to(device), real_batch["mask"].to(device)
+            wr = real_batch["weight"].to(device)
+            logits_r = model(xr)
+            loss_r = weighted_mean(merged_loss_fn(logits_r, yr), wr)
+
+            loss = loss_f + loss_r
+            if train:
+                optimizer.zero_grad(); loss.backward(); optimizer.step()
+
+            total_loss += loss.item()
+            dice_sum += dice_binary(logits_r.argmax(1), yr)
+            dice_fake_sum += dice_binary(logits_f.argmax(1), yf)
+            n += 1
+
+    return (total_loss / max(n, 1), dice_sum / max(n, 1), dice_fake_sum / max(n, 1))
+
+
+@torch.no_grad()
+def eval_real_per_patient(model, dataset, device, batch_size=8):
+    model.eval(); acc = {}
+    for start in range(0, len(dataset), batch_size):
+        idxs = range(start, min(start + batch_size, len(dataset)))
+        items = [dataset[i] for i in idxs]
+        stems = [dataset.slices[i] for i in idxs]
+        x = torch.stack([it["image"] for it in items]).to(device)
+        y = torch.stack([it["mask"] for it in items]).to(device)
+        pred = model(x).argmax(1)
+        pm, gm = (pred > 0).float(), (y > 0).float()
+        for b, stem in enumerate(stems):
+            pid = stem.rsplit("_", 1)[0]
+            a = acc.setdefault(pid, [0.0, 0.0, 0.0])
+            a[0] += float((pm[b] * gm[b]).sum()); a[1] += float(pm[b].sum()); a[2] += float(gm[b].sum())
+    eps = 1e-6
+    return {pid: (2 * tp + eps) / (ps + gs + eps) for pid, (tp, ps, gs) in acc.items()}
+
+
+@torch.no_grad()
+def dump_val_predictions(model, dataset, device, out_dir, batch_size=8):
+    try:
+        import nibabel as nib
+    except ImportError:
+        log.warning("nibabel not available — skipping val prediction dump"); return
+    model.eval(); os.makedirs(out_dir, exist_ok=True); vols = {}
+    for start in range(0, len(dataset), batch_size):
+        idxs = range(start, min(start + batch_size, len(dataset)))
+        items = [dataset[i] for i in idxs]
+        stems = [dataset.slices[i] for i in idxs]
+        x = torch.stack([it["image"] for it in items]).to(device)
+        y = torch.stack([it["mask"] for it in items])
+        pred = model(x).argmax(1).cpu()
+        for b, stem in enumerate(stems):
+            pid, sidx = stem.rsplit("_", 1)
+            vols.setdefault(pid, {})[int(sidx)] = (
+                x[b, 1].cpu().numpy().astype(np.float32),
+                y[b].numpy().astype(np.int16), pred[b].numpy().astype(np.int16))
+    affine = np.diag([PD_SPACING[0], PD_SPACING[1], PD_SPACING[2], 1.0]).astype(np.float32)
+    csv_path = os.path.join(out_dir, "per_slice_dice.csv"); eps = 1e-6
+    with open(csv_path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["patient_id", "slice_idx", "dice", "gt_voxels", "pred_voxels", "false_neg", "false_pos"])
+        for pid, slices in sorted(vols.items()):
+            order = sorted(slices.keys())
+            img = np.stack([slices[s][0] for s in order], 0)
+            gt = np.stack([slices[s][1] for s in order], 0)
+            pr = np.stack([slices[s][2] for s in order], 0)
+            nib.save(nib.Nifti1Image(img, affine), os.path.join(out_dir, f"{pid}_image.nii.gz"))
+            nib.save(nib.Nifti1Image((gt > 0).astype(np.int16), affine), os.path.join(out_dir, f"{pid}_gt.nii.gz"))
+            nib.save(nib.Nifti1Image((pr > 0).astype(np.int16), affine), os.path.join(out_dir, f"{pid}_pred.nii.gz"))
+            for k, s in enumerate(order):
+                g = (gt[k] > 0); p_ = (pr[k] > 0)
+                tp = float((g & p_).sum()); gs = float(g.sum()); ps = float(p_.sum())
+                w.writerow([pid, s, f"{(2*tp + eps) / (ps + gs + eps):.4f}",
+                            int(gs), int(ps), int(gs - tp), int(ps - tp)])
+            log.info(f"  dumped {pid}: {len(order)} slices")
+    log.info(f"  per-slice Dice CSV -> {csv_path}")
+
+
+def load_weights(path, variant):
+    if variant == "none" or not path:
+        return None
+    import json
+    with open(path) as fh:
+        blob = json.load(fh)
+    if variant not in blob:
+        raise SystemExit(f"{path} has no '{variant}' block (keys: {list(blob)})")
+    meta = blob.get("meta", {})
+    log.info(f"  weights [{variant}]: {meta.get('n_patients')} patients, "
+             f"{meta.get('n_slices')} slices, spacing {meta.get('spacing_mm')} mm")
+    return blob[variant]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pretrained_ckpt", required=True)
+    ap.add_argument("--fake_data_root", required=True)
+    ap.add_argument("--real_data_root", required=True)
+    ap.add_argument("--out_dir", required=True)
+    ap.add_argument("--variant", required=True, choices=["up", "down", "none"])
+    ap.add_argument("--weights_fake", default=None)
+    ap.add_argument("--weights_real", default=None)
+    ap.add_argument("--epochs", type=int, default=100)
+    ap.add_argument("--batch_size", type=int, default=8)
+    ap.add_argument("--lr", type=float, default=1e-5)
+    ap.add_argument("--patience", type=int, default=15)
+    ap.add_argument("--num_workers", type=int, default=4)
+    ap.add_argument("--class_weights", type=float, nargs=3, default=[0.1, 1.5, 1.5])
+    ap.add_argument("--seed", type=int, default=42)
+    args = ap.parse_args()
+
+    if args.variant != "none" and not (args.weights_fake and args.weights_real):
+        ap.error("--variant up/down requires --weights_fake and --weights_real")
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    set_seed(args.seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    log.info(f"Device: {device}  |  LR: {args.lr} -> 1e-8  |  A3 **v2** variant: {args.variant}  |  PLAIN 2.5D, uncropped")
+
+    cw_check = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
+    ok, rep_ce, my_ce, ce_diff = verify_ce_matches_replica(cw_check, device)
+    log.info(f"CE-equivalence check: replica={rep_ce:.8f}  v2={my_ce:.8f}  diff={ce_diff:.2e}  "
+             f"-> {'PASS' if ok else 'FAIL'}")
+    if not ok:
+        raise SystemExit(f"CE no longer matches replica (diff {ce_diff:.3e}). Refusing to train.")
+    log.info("NOTE: per-sample vs batch Dice is NOT equalised (it cannot be). "
+             "Interpret up/down against the --variant none control, not replica directly.")
+
+    w_fake = load_weights(args.weights_fake, args.variant)
+    w_real = load_weights(args.weights_real, args.variant)
+
+    model = build_model(args.pretrained_ckpt, device)
+
+    fake_train = WeightedMeniscus2_5DDataset(
+        os.path.join(args.fake_data_root, "train", "images"),
+        os.path.join(args.fake_data_root, "train", "masks"), w_fake, augment=True)
+    fake_val = WeightedMeniscus2_5DDataset(
+        os.path.join(args.fake_data_root, "val", "images"),
+        os.path.join(args.fake_data_root, "val", "masks"), w_fake, augment=False)
+    real_train = WeightedRealPDDataset(
+        os.path.join(args.real_data_root, "train", "images"),
+        os.path.join(args.real_data_root, "train", "masks"), w_real, augment=True)
+    real_val = WeightedRealPDDataset(
+        os.path.join(args.real_data_root, "val", "images"),
+        os.path.join(args.real_data_root, "val", "masks"), w_real, augment=False)
+
+    log.info(f"Fake PD — train: {len(fake_train)} slices  |  val: {len(fake_val)} slices")
+    log.info(f"Real PD — train: {len(real_train)} slices  |  val: {len(real_val)} slices")
+    sample_w = [float(fake_train[i]["weight"]) for i in range(0, min(len(fake_train), 400), 7)]
+    log.info(f"  fake-train weight sample: min {min(sample_w):.3f}  "
+             f"mean {sum(sample_w)/len(sample_w):.3f}  max {max(sample_w):.3f}")
+
+    fake_train_loader = DataLoader(fake_train, args.batch_size, shuffle=True, num_workers=args.num_workers)
+    fake_val_loader = DataLoader(fake_val, args.batch_size, shuffle=False, num_workers=args.num_workers)
+    real_train_loader = DataLoader(real_train, args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=False)
+    real_val_loader = DataLoader(real_val, args.batch_size, shuffle=False, num_workers=args.num_workers)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-8)
+
+    class_weights = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
+    merged_loss_fn = MergedLossPerSample(w_bg=0.1, w_men=1.5)
+
+    val_pids = sorted({s.rsplit("_", 1)[0] for s in real_val.slices})
+    hist_fh = open(os.path.join(args.out_dir, "history.csv"), "w", newline="")
+    hist = csv.writer(hist_fh)
+    hist.writerow(["epoch", "lr", "loss_tr", "loss_va", "dice_real_tr", "dice_real_va", "gap",
+                   "dice_fake_tr", "dice_fake_va", "dice_va_perpatient_mean"] + [f"dice_va_{p}" for p in val_pids])
+
+    best_val_dice, no_improve = -1.0, 0
+    for epoch in range(args.epochs):
+        lr = optimizer.param_groups[0]["lr"]
+        tl, td, tdf = run_epoch(model, real_train_loader, fake_train_loader, optimizer,
+                                merged_loss_fn, class_weights, device, train=True)
+        vl, vd, vdf = run_epoch(model, real_val_loader, fake_val_loader, optimizer,
+                                merged_loss_fn, class_weights, device, train=False)
+        scheduler.step()
+
+        pp = eval_real_per_patient(model, real_val, device, args.batch_size)
+        pp_mean = float(np.mean(list(pp.values()))) if pp else float("nan")
+        pp_str = "  ".join(f"{p}={pp.get(p, float('nan')):.4f}" for p in val_pids)
+
+        log.info(f"Epoch {epoch:03d}  lr={lr:.2e}  loss_tr={tl:.4f} loss_va={vl:.4f}  |  "
+                 f"dice_real tr={td:.4f} va={vd:.4f} gap={td - vd:+.4f}  |  dice_fake tr={tdf:.4f} va={vdf:.4f}")
+        log.info(f"           per-patient val (clean pass): mean={pp_mean:.4f}   {pp_str}")
+
+        hist.writerow([epoch, f"{lr:.3e}", f"{tl:.5f}", f"{vl:.5f}", f"{td:.5f}", f"{vd:.5f}", f"{td - vd:+.5f}",
+                       f"{tdf:.5f}", f"{vdf:.5f}", f"{pp_mean:.5f}"] + [f"{pp.get(p, float('nan')):.5f}" for p in val_pids])
+        hist_fh.flush()
+
+        torch.save(model.state_dict(), os.path.join(args.out_dir, "ckpt_latest.pth"))
+        if vd > best_val_dice:
+            best_val_dice, no_improve = vd, 0
+            torch.save(model.state_dict(), os.path.join(args.out_dir, "ckpt_best.pth"))
+            log.info(f"  New best: {best_val_dice:.4f} (epoch {epoch}) — dumping val predictions")
+            dump_val_predictions(model, real_val, device, os.path.join(args.out_dir, "val_predictions"), args.batch_size)
+        else:
+            no_improve += 1
+            if args.patience > 0 and no_improve >= args.patience:
+                log.info(f"Early stopping at epoch {epoch}. Best: {best_val_dice:.4f}")
+                break
+
+    hist_fh.close()
+    log.info(f"Done. Best val Dice: {best_val_dice:.4f}")
+
+
+if __name__ == "__main__":
+    main()
