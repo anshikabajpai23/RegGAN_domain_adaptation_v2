@@ -322,6 +322,10 @@
     main { padding: 28px 18px 60px; }
     h1 { font-size: 22px; }
   }
+  #registry table { min-width: 1500px; }
+  #registry td, #registry th { white-space: normal; overflow-wrap: anywhere; font-size: 12px; min-width: 95px; vertical-align: top; }
+  #registry td:first-child, #registry th:first-child { min-width: 60px; }
+  #registry td.mono { min-width: 175px; }
 </style>
 
 <div class="layout">
@@ -346,9 +350,31 @@
     <a href="#s12">v12 — New Ablations</a>
   </div>
   <div class="nav-group">
+    <div class="nav-label">Phase 3</div>
+    <a href="#p3">Diagnosis</a>
+  </div>
+  <div class="nav-group">
     <div class="nav-label">Phase 4</div>
     <a href="#p4checks">Debugging Checks</a>
     <a href="#p4approaches">Candidate Approaches</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Phase 5</div>
+    <a href="#p5crop">Crop+seq arm</a>
+    <a href="#p5plain">Plain 2.5D arm</a>
+    <a href="#run3">Run 3 fake-only arm</a>
+    <a href="#controls">Baselines / controls</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Phase 6 / Torn</div>
+    <a href="#p6">Phase 6 runs</a>
+    <a href="#torn">Torn cohort</a>
+  </div>
+  <div class="nav-group">
+    <div class="nav-label">Backtracking</div>
+    <a href="#registry">Run registry (all phases)</a>
+    <a href="#commits">Git commits</a>
+    <a href="#conventions">Naming &amp; selection</a>
   </div>
   <div class="nav-group">
     <div class="nav-label">Reference</div>
@@ -366,7 +392,7 @@
     <div class="eyebrow">RegGAN Domain Adaptation · BigRed200</div>
     <h1>Experiment Version Log</h1>
     <div class="doc-meta">
-      <span class="meta"><strong>Updated</strong> 2026-09-12</span>
+      <span class="meta"><strong>Updated</strong> 2026-10-19</span>
       <span class="meta"><strong>BigRed base</strong> /N/project/prostate_cancer_ai/anshika/regGAN/</span>
       <span class="meta"><strong>Local base</strong> ~/Desktop/github/RegGAN_domain_adaptation_v2/</span>
     </div>
@@ -589,7 +615,7 @@
 
   <!-- v12 -->
   <div class="section" id="s12">
-    <h2>v12 — New Ablations (In Progress)</h2>
+    <h2>v12 — New Ablations (Done)</h2>
     <p>Fair redo of v3 ablations using the v7_mixed recipe instead of fake PD only. Baseline to beat: <span class="dice hi" style="font-size:13px">0.781</span>.</p>
     <div class="tbl">
       <table>
@@ -599,22 +625,41 @@
             <td>run_v12_tversky</td>
             <td>TverskyLoss(α=0.3, β=0.7) replaces SoftDice on fake PD branch — FN penalised 2.3× more than FP</td>
             <td class="mono">finetune_meniscus_v12_tversky.py</td>
-            <td><span class="chip chip-wip">Running</span></td>
-            <td class="na">—</td>
+            <td><span class="chip chip-done">Done</span></td>
+            <td><span class="dice mid">0.7755</span></td>
             <td>v3_tversky: 0.656 (unfair — fake PD only)</td>
           </tr>
           <tr>
             <td>run_v12_photometric</td>
             <td>Photometric aug on fake PD branch: gamma (0.7–1.5), Gaussian blur (σ 0.3–1.2), contrast stretch (50% each)</td>
             <td class="mono">finetune_meniscus_v12_photometric.py</td>
-            <td><span class="chip chip-wip">Running</span></td>
-            <td class="na">—</td>
+            <td><span class="chip chip-done">Done</span></td>
+            <td><span class="dice mid">0.7671</span></td>
             <td>v3_photometric: 0.681 (unfair — fake PD only)</td>
           </tr>
         </tbody>
       </table>
     </div>
     <div class="note"><strong>Rationale:</strong> v3 ablations were unfair because they used fake PD only — the setup that maxes out at 0.695. Now testing the same ideas on the v7_mixed setup (real PD + fake PD), which maxes out at 0.781. The question is whether these loss/aug choices add value on top of real PD labels.</div>
+  </div>
+
+
+  <!-- Phase 3 -->
+  <div class="section" id="p3">
+    <h2>Phase 3 — Diagnosis-Driven (Instrumented Replica)</h2>
+    <p>Re-ran the v7_mixed recipe as <code>finetune_meniscus_v7_replica.py</code> (loss byte-identical to commit 64b1020, the SPIE-submission state) with logging added: train Dice, fake vs real Dice, clean per-patient val Dice, val prediction dumps, fixed seed, <code>history.csv</code>. Job <code>finetune_v7_replica.sh</code> (<code>SEED</code> knob, overwrite guard). Doc: <code>docs/phase3_experiments.md</code>.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Finding</th><th>Evidence</th><th>What happened next</th></tr></thead>
+        <tbody>
+          <tr><td>Overfitting</td><td>train Dice 0.946 vs val 0.779 (gap +0.166); val loss flat from epoch ~4</td><td>P1 tested exposure; repeats turned out to be useful signal</td></tr>
+          <tr><td>Domain gap is small</td><td>fake-PD val 0.760 vs real-PD val 0.781; best-FID RegGAN (147.6) gave worse Dice</td><td>RegGAN not treated as the bottleneck; motivated Run 3 (fake-only) later</td></tr>
+          <tr><td>Detection, not segmentation</td><td>2 val pts: 9 of 32 empty slices hallucinated = 46% of FP; meniscus-slice Dice 0.79 mean / 0.844 median</td><td>P2 negatives; on 17pt the hallucination share was 17%, not 46%</td></tr>
+          <tr><td>Checkpoint selection is noisy</td><td>only 2 real val patients</td><td>k-fold, seed-7 replica (noise floor 0.0226), weight averaging</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Reference result:</strong> <code>run_v7_replica_seed42</code>: val 0.7809 at epoch 10; 17pt test <span class="dice hi" style="font-size:13px">0.7780</span>. This is the base for Phase 4, the Phase 5 plain arm and Phase 6. Tooling: <code>segmentation/diagnose_checkpoint.py</code>, <code>scripts/plot_replica_diagnostics.py</code>, <code>diagnose_v7_mixed.sh</code>.</div>
   </div>
 
   <!-- 9. Phase 4 -->
@@ -703,14 +748,255 @@
           <tr>
             <td>Crop + Sequence (combined)</td>
             <td>Sequence architecture trained on the already-cropped data — tests whether the two largest gains stack or overlap</td>
-            <td class="na">—</td>
-            <td class="na">—</td>
-            <td><span class="chip chip-wip">Running</span> Training on BigRed (<code>run_v7_crop_sequence</code>)</td>
+            <td><span class="dice hi">0.8057</span></td>
+            <td class="mono" style="color:var(--d-hi)">+0.0277</td>
+            <td><span class="chip chip-done">Done</span> <strong>First confirmed real gain</strong> (above the 0.0226 floor). Gains roughly additive (crop +0.0130, sequence +0.0178). Crop box covers 100% of GT voxels on 17/17 test patients, so not a box artifact. Base for the Phase 5 crop arm.</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <div class="note"><strong>Only P1 is confirmed real</strong> (and it's harmful). Crop (+0.0130) and Sequence (+0.0178) are the two biggest gains seen — both bigger than the already-rejected P4 — but neither individually clears the 0.0226 floor by the same standard applied to reject P4/P2. They're the leading candidates for a confirmatory repeat-seed run.</div>
+    <div class="note"><strong>Confirmed effects:</strong> P1 (harmful, −0.0291) and crop + sequence combined (helpful, +0.0277). Crop and sequence alone stay below the floor individually. Flip TTA is free at inference and worth applying to any final checkpoint.</div>
+  </div>
+
+
+  <!-- Phase 5: crop+seq arm -->
+  <div class="section" id="p5crop">
+    <h2>Phase 5 — Novel Approaches, Crop+Sequence Arm</h2>
+    <p>One change each on top of <code>run_v7_crop_sequence</code> (17pt test Dice <span class="dice hi" style="font-size:13px">0.8057</span>). Same start checkpoint, architecture and cropped data. Notebook: <code>notebooks/analysis_phase5_novel_approaches_17patients.ipynb</code>.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>What it changes</th><th>Run dir</th><th>17pt Dice</th><th>Δ vs crop+seq</th><th>Wins (of 17)</th></tr></thead>
+        <tbody>
+          <tr><td>A3-up</td><td>Slice-position weighted loss, end slices up to 2×</td><td class="mono">run_a3_up_seed42</td><td><span class="dice hi">0.8006</span></td><td class="mono">−0.0051</td><td>8</td></tr>
+          <tr><td>A3-down</td><td>Slice-position weighted loss, end slices down to 0.3×</td><td class="mono">run_a3_down_seed42</td><td><span class="dice mid">0.7905</span></td><td class="mono">−0.0152</td><td>2</td></tr>
+          <tr><td>E1</td><td>Slice position as a 4th input channel (zero-init)</td><td class="mono">run_e1_pos_seed42</td><td><span class="dice mid">0.7880</span></td><td class="mono">−0.0178</td><td>5</td></tr>
+          <tr><td>E2</td><td>Slice position via FiLM gating at the ConvLSTM bottleneck (zero-init)</td><td class="mono">run_e2_film_seed42</td><td><span class="dice hi">0.8016</span></td><td class="mono">−0.0041</td><td>8</td></tr>
+          <tr><td>G2</td><td>Region-darker-than-rim loss, gated by a pre-check</td><td class="mono">run_g2_rim_seed42</td><td><span class="dice hi">0.8022</span></td><td class="mono">−0.0035</td><td>8</td></tr>
+          <tr><td>D</td><td>Position-conditioned area (shape) prior, lam auto-calibrated</td><td class="mono">run_d_shape_lamauto_seed42</td><td><span class="dice mid">0.7997</span></td><td class="mono">−0.0060</td><td>7</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Verdict:</strong> none beat the base; all within or below the noise floor. Caveats: the crop-arm A3 runs carry a CE-normalisation bug (fixed only in the plain arm as A3v2); D's area term decays to near zero within a few epochs, so D behaves like the base.</div>
+  </div>
+
+  <!-- Phase 5: plain 2.5D arm -->
+  <div class="section" id="p5plain">
+    <h2>Phase 5 — Plain 2.5D Arm (on the Replica)</h2>
+    <p>Same ideas, one change each on the replica recipe (<code>finetune_meniscus_v7_replica_*.py</code>), compared to <code>run_v7_replica_seed42</code> = <span class="dice hi" style="font-size:13px">0.7780</span>. Methodologically cleaner arm (single change, no crop or sequence stacked underneath).</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>What it changes</th><th>Run dir</th><th>17pt Dice</th><th>Δ vs replica</th></tr></thead>
+        <tbody>
+          <tr><td>A3-up v1</td><td>Position-weighted loss, ends ×2 (has the CE bug)</td><td class="mono">run_2_5d_a3_up_seed42</td><td><span class="dice mid">0.7569</span></td><td class="mono">−0.0211</td></tr>
+          <tr><td>A3-down v1</td><td>Position-weighted loss, ends ×0.3 (has the CE bug)</td><td class="mono">run_2_5d_a3_down_seed42</td><td><span class="dice mid">0.7634</span></td><td class="mono">−0.0146</td></tr>
+          <tr><td>A3v2-none (control)</td><td>CE normalisation fixed, no position weighting</td><td class="mono">run_2_5d_a3v2_none_seed42</td><td><span class="dice mid">0.7589</span></td><td class="mono">−0.0191</td></tr>
+          <tr><td>A3v2-up</td><td>CE fixed + ends ×2</td><td class="mono">run_2_5d_a3v2_up_seed42</td><td><span class="dice mid">0.7590</span></td><td class="mono">−0.0190 (+0.0001 vs control)</td></tr>
+          <tr><td>A3v2-down</td><td>CE fixed + ends ×0.3</td><td class="mono">run_2_5d_a3v2_down_seed42</td><td><span class="dice mid">0.7616</span></td><td class="mono">−0.0164 (+0.0027 vs control)</td></tr>
+          <tr><td>E1</td><td>Position input channel</td><td class="mono">run_2_5d_e1_seed42</td><td><span class="dice hi">0.7832</span></td><td class="mono">+0.0052</td></tr>
+          <tr><td>E2</td><td>FiLM position gating</td><td class="mono">run_2_5d_e2_seed42</td><td><span class="dice mid">0.7683</span></td><td class="mono">−0.0097</td></tr>
+          <tr><td>G2</td><td>Rim-darkness loss</td><td class="mono">run_2_5d_g2_seed42</td><td><span class="dice mid">0.7759</span></td><td class="mono">−0.0021</td></tr>
+          <tr><td>D</td><td>Area prior (rebuilt on uncropped masks)</td><td class="mono">run_2_5d_d_lamauto_seed42</td><td><span class="dice mid">0.7766</span></td><td class="mono">−0.0014</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Verdict:</strong> no real gain. The CE fix itself (A3v2-none) moves the baseline by −0.019, and position weighting on top of it does nothing (+0.0001 / +0.0027). E1 is the only positive delta (+0.0052), well inside the floor. Run log: <code>docs/Phase 5 Replica-Arm Log.html</code>.</div>
+  </div>
+
+  <!-- Run 3: fake-only arm -->
+  <div class="section" id="run3">
+    <h2>Run 3 — Fake-PD-Only Arm (zero-shot DESS→PD)</h2>
+    <p>No real PD in training <strong>or</strong> checkpoint selection (fake val only), so the fake→real gap reopens (~0.09–0.15) and the Phase 5 ideas get room to show an effect. Scripts <code>finetune_meniscus_fakeonly_*.py</code>; notebook <code>analysis_run3_fakeonly_17patients.ipynb</code>.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>Run dir</th><th>17pt Dice</th><th>Δ vs base seed42</th></tr></thead>
+        <tbody>
+          <tr><td>Base, seed 42</td><td class="mono">run_fakeonly_base_seed42</td><td><span class="dice lo">0.6725</span></td><td class="mono">0</td></tr>
+          <tr><td>Base, seed 7</td><td class="mono">run_fakeonly_base_seed7</td><td><span class="dice lo">0.6468</span></td><td class="mono">−0.0257 (seed noise)</td></tr>
+          <tr><td>A3v2-none (control)</td><td class="mono">run_fakeonly_a3_none_seed42</td><td><span class="dice lo">0.6410</span></td><td class="mono">−0.0315</td></tr>
+          <tr><td>A3-up</td><td class="mono">run_fakeonly_a3_up_seed42</td><td><span class="dice lo">0.6638</span></td><td class="mono">−0.0087</td></tr>
+          <tr><td>A3-down</td><td class="mono">run_fakeonly_a3_down_seed42</td><td><span class="dice lo">0.6421</span></td><td class="mono">−0.0304</td></tr>
+          <tr><td>E1</td><td class="mono">run_fakeonly_e1_seed42</td><td><span class="dice lo">0.6917</span></td><td class="mono">+0.0192</td></tr>
+          <tr><td>E2</td><td class="mono">run_fakeonly_e2_seed42</td><td><span class="dice lo">0.6476</span></td><td class="mono">−0.0249</td></tr>
+          <tr><td>G2</td><td class="mono">run_fakeonly_g2_seed42</td><td><span class="dice lo">0.6811</span></td><td class="mono">+0.0086</td></tr>
+          <tr><td>D</td><td class="mono">run_fakeonly_d_seed42</td><td><span class="dice lo">0.6780</span></td><td class="mono">+0.0055</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="warn"><strong>Seed noise is larger here:</strong> the two base seeds differ by 0.0257 in mean Dice, more than any idea's gain (best: E1 +0.0192). Nothing in this arm is distinguishable from seed noise without repeat seeds.</div>
+  </div>
+
+  <!-- Baselines / controls -->
+  <div class="section" id="controls">
+    <h2>Baselines and Controls</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>What it is</th><th>Run dir / scripts</th><th>17pt Dice</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>ImageNet-init control</td><td>Same U-Net, ImageNet encoder, trained on the 15 real PD patients ONLY: no DESS checkpoint, no fake PD. Same real-PD steps per epoch as the replica; LR 1e-4 (decoder/head random).</td><td class="mono">run_imagenet_control_lr1e-4<br>finetune_meniscus_imagenet_control.py</td><td><span class="dice hi">0.8143</span></td><td><span class="chip chip-done">Done</span> +0.0363 vs replica, +0.0086 vs crop+seq</td></tr>
+          <tr><td>nnU-Net 2d / 3d_fullres (B1 / B2)</td><td>nnU-Net fold 0 on the same 13-train / 2-val split</td><td class="mono">setup_nnunet_baseline.sh, train_nnunet_baseline.sh, infer_eval_nnunet_baseline.sh, scripts/eval_nnunet_predictions.py</td><td class="na">—</td><td><span class="chip chip-plan">Scripts ready</span> results not in the local repo</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="warn"><strong>Important for the paper:</strong> by the criterion written into the control's own script ("if this control matches or beats the replica, the DESS-pretrain + RegGAN + mixed pipeline is not earning its complexity"), it beats the replica by more than the noise floor and also edges out crop+seq. This must be addressed before claiming the RegGAN pipeline helps (e.g. ImageNet init + fake PD, label-efficiency with fewer real patients, repeat seeds).</div>
+  </div>
+
+  <!-- Phase 6 -->
+  <div class="section" id="p6">
+    <h2>Phase 6 — New Directions</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Run</th><th>What it changes (vs replica recipe)</th><th>Run dir</th><th>17pt Dice</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>N1 — slab fake PD (v13)</td><td>Fake PD averaged into 3.6 mm slabs with soft partial-volume labels; fixed 1189 fake batches/epoch</td><td class="mono">run_v13_slab_e50</td><td><span class="dice hi">0.7906</span></td><td><span class="chip chip-done">Done</span> +0.0126, below floor</td></tr>
+          <tr><td>v14 R1 (gpu-interactive)</td><td>Synthetic tears painted inside the meniscus on training slices; labels unchanged (segment the whole wedge through the tear). 4 h limit, may stop early.</td><td class="mono">run_v14_tear_R1_int_seed42</td><td class="na">—</td><td><span class="chip chip-wip">Submitted</span></td></tr>
+          <tr><td>v14 R1</td><td>Same as above, regular gpu partition (full 50 epochs)</td><td class="mono">run_v14_tear_R1_seed42</td><td class="na">—</td><td><span class="chip chip-wip">Submitted</span></td></tr>
+          <tr><td>v14 R2</td><td>R1 + visible-meniscus head (tear map = whole − visible)</td><td class="mono">run_v14_tear_R2_seed42</td><td class="na">—</td><td><span class="chip chip-wip">Submitted</span></td></tr>
+          <tr><td>v14 R3</td><td>R2 + contour (outer boundary band) head</td><td class="mono">run_v14_tear_R3_seed42</td><td class="na">—</td><td><span class="chip chip-wip">Submitted</span></td></tr>
+          <tr><td>v14 R4</td><td>R3 + inclusion loss (visible must lie inside whole)</td><td class="mono">run_v14_tear_R4_seed42</td><td class="na">—</td><td><span class="chip chip-wip">Submitted</span></td></tr>
+          <tr><td>v14 R1c</td><td>R1 + contour head only (independent of R2)</td><td class="mono">run_v14_tear_R1c_seed42</td><td class="na">—</td><td><span class="chip chip-wip">Submitted</span></td></tr>
+          <tr><td>v14 R5</td><td>Shape prior (autoencoder on healthy masks)</td><td class="na">—</td><td class="na">—</td><td><span class="chip chip-plan">Not implemented</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>v14 code:</strong> <code>segmentation/tear_synth.py</code>, <code>dataset_2_5d_tear.py</code>, <code>model_tear_amodal.py</code>, <code>finetune_meniscus_v14_tear_amodal.py</code>; jobs <code>finetune_v14_tear_amodal.sh</code> (<code>VARIANT=R1|R2|R3|R4|R1c</code>, gpu) and <code>finetune_v14_tear_R1_interactive.sh</code>. Whole-wedge losses are imported from the replica script, so R0 = replica. Validation stays clean (no tears) so checkpoint selection matches the replica; <code>history.csv</code> adds <code>dice_synthtear_va</code> (val with fixed synthetic tears). Preview: <code>scripts/preview_tear_synth.py</code>.</div>
+    <div class="warn"><strong>Held out:</strong> the 5 torn patients (AC13D01F99D88C, AC116435D25299, AC1CEC4C14F850, AC152F0CF07CF3, AC1A200F61EDC1) are checked at startup and the run aborts if any appears in train/val. They are for inference only.</div>
+  </div>
+
+  <!-- Torn cohort -->
+  <div class="section" id="torn">
+    <h2>Torn-Meniscus Cohort</h2>
+    <p>Scans: <code>data/iu-torn/pd-files/</code> on BigRed (~100 sagittal PD scans). An earlier 20-patient run of <code>run_v7_mixed</code> is in <code>real_pd_predictions_control_20pt</code> (<code>infer_control_20pt.sh</code>, <code>data/iu-control/pd-files</code>). Five patients were hand-segmented (single rater, one binary meniscus label) and are held out of all training. GT: <code>~/Desktop/delete/nikhil-segmentations 2/&lt;id&gt;/Segmentation.seg.nrrd</code>; raw scans: <code>~/Desktop/delete/aug 22/</code>. Notebook: <code>notebooks/torn_patient_comparison.ipynb</code>.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Model (no retraining)</th><th>Inference job</th><th>Output dir</th><th>Mean Dice, 5 torn pts</th></tr></thead>
+        <tbody>
+          <tr><td>Replica (plain 2.5D)</td><td class="mono">infer_torn_5pt.sh</td><td class="mono">torn_predictions_replica_seed42</td><td><span class="dice mid">0.719</span></td></tr>
+          <tr><td>Crop + sequence</td><td class="mono">infer_torn_5pt.sh</td><td class="mono">torn_predictions_crop_sequence</td><td><span class="dice mid">0.730</span></td></tr>
+          <tr><td>Crop arm: A3-up / A3-down / E1 / E2 / G2 / D</td><td class="mono">infer_torn_5pt_novel.sh</td><td class="mono">torn_predictions_crop_*</td><td class="mono">0.756 / 0.748 / 0.699 / 0.751 / 0.729 / 0.734</td></tr>
+          <tr><td>Plain arm: A3v2-up / A3v2-down / E1 / E2 / G2 / D</td><td class="mono">infer_torn_5pt_novel.sh</td><td class="mono">torn_predictions_2_5d_*</td><td class="mono">0.715 / 0.707 / 0.723 / 0.730 / 0.718 / 0.710</td></tr>
+          <tr><td>v14 R1 (gpu-interactive)</td><td class="mono">infer_torn_v14_R1_interactive.sh</td><td class="mono">torn_predictions_v14_R1_int</td><td class="na">pending</td></tr>
+          <tr><td>v14 R1 / R2 / R3 / R4 / R1c</td><td class="mono">infer_torn_v14.sh</td><td class="mono">torn_predictions_v14_{R1,R2,R3,R4,R1c}</td><td class="na">pending</td></tr>
+          <tr><td>v14 R4 / R1c re-run (final checkpoints)</td><td class="mono">infer_torn_v14_R4_R1c.sh</td><td class="mono">torn_predictions_v14_{R4,R1c}</td><td class="na">submit after ft_v14_R4 / ft_v14_R1c finish; refuses while they are queued</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Error analysis (replica, vs single-rater GT):</strong> FN 9,751 vs FP 11,950 voxels (FP &gt; FN in 3/5). Mean intensity: correct 0.065, missed 0.112, false positive 0.179, so the bigger error is spread into brighter grey tissue. Hole filling / closing: no change (0.7185). Lowest patient for every model: AC1CEC4C14F850 (0.60–0.67).</div>
+    <div class="warn"><strong>Not final:</strong> dropping predicted voxels brighter than 0.15 gave 0.7185→0.7676 (replica) and 0.7304→0.7652 (crop+seq), but the threshold was tuned on these same 5 patients. GT is single-rater and is being re-annotated; differences of ~0.03 across 5 patients are not interpretable.</div>
+  </div>
+
+  <!-- Run registry -->
+  <div class="section" id="registry">
+    <h2>Run Registry — All Phases</h2>
+    <p>One row per training run, so any result can be traced back to its job file, script, starting checkpoint and data. Paths are on BigRed under <code>/N/project/prostate_cancer_ai/anshika/regGAN/</code>: run dirs in <code>segmentation_runs/</code>, data dirs at the outer level, job files in <code>regGAN/regGAN/</code>, scripts in <code>regGAN/regGAN/segmentation/</code>. "17pt" = D1+New test set, "D1" = 10 pts, "D1-8" = 8-pt subset. Seed 42 unless stated.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Phase</th><th>Run dir</th><th>Job (.sh)</th><th>Training script</th><th>Init</th><th>Fake data</th><th>Real data</th><th>Change</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="mono">run_001</td><td class="mono">finetune_meniscus.sh</td><td class="mono">(see job)</td><td>(see job)</td><td>55-pt DESS-derived set (per notes)</td><td>none</td><td>first fine-tune, v1 recipe</td><td>D1 0.429</td></tr>
+          <tr><td>1</td><td class="mono">run_002</td><td class="mono">finetune_all155.sh</td><td class="mono">(see job)</td><td>baseline_best_model.pth</td><td>fake_pd_all155 (old RegGAN)</td><td>none</td><td>v1 recipe</td><td>D1 0.632</td></tr>
+          <tr><td>1</td><td class="mono">run_002_v2</td><td class="mono">finetune_run002_v2.sh</td><td class="mono">finetune_meniscus_v2.py</td><td>baseline_best_model.pth</td><td>old RegGAN</td><td>none</td><td>v2: weighted CE, aug, cosine LR</td><td>D1 0.695 / 17pt 0.687</td></tr>
+          <tr><td>1</td><td class="mono">run_003</td><td class="mono">finetune_run003.sh</td><td class="mono">finetune_meniscus.py</td><td>baseline_best_model.pth</td><td>old RegGAN</td><td>none</td><td>v1 + early stopping</td><td>D1 0.650</td></tr>
+          <tr><td>1</td><td class="mono">run_005</td><td class="mono">finetune_run005_ep52.sh</td><td class="mono">(see job)</td><td>baseline_best_model.pth</td><td>fake_pd_run006_ep52</td><td>none</td><td>new RegGAN ep52</td><td>D1 0.640</td></tr>
+          <tr><td>1</td><td class="mono">run_ep14_v2</td><td class="mono">finetune_ep14_v2.sh</td><td class="mono">(see job)</td><td>baseline_best_model.pth</td><td>fake_pd_run006_ep14</td><td>none</td><td>new RegGAN ep14, v2</td><td>D1 0.603</td></tr>
+          <tr><td>1 (v3)</td><td class="mono">run_v3_rotation</td><td class="mono">finetune_run002v2_v3_rotation.sh</td><td class="mono">finetune_meniscus_v3_rotation.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none</td><td>rotation ±15°</td><td>see 4b</td></tr>
+          <tr><td>1 (v3)</td><td class="mono">run_v3_tversky</td><td class="mono">finetune_run002v2_v3_tversky.sh</td><td class="mono">finetune_meniscus_v3_tversky.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none</td><td>Tversky loss</td><td>see 4b</td></tr>
+          <tr><td>1 (v3)</td><td class="mono">run_v3_elastic</td><td class="mono">finetune_run002v2_v3_elastic.sh</td><td class="mono">finetune_meniscus_v3_elastic.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none</td><td>elastic aug</td><td>see 4b</td></tr>
+          <tr><td>1 (v3)</td><td class="mono">run_v3_photometric</td><td class="mono">finetune_run002v2_v3_photometric.sh</td><td class="mono">finetune_meniscus_v3_photometric.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none</td><td>photometric aug</td><td>see 4b</td></tr>
+          <tr><td>1 (v3)</td><td class="mono">run_v3_resnet50</td><td class="mono">finetune_run002v2_v3_resnet50.sh</td><td class="mono">finetune_meniscus_v3_resnet50.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none</td><td>ResNet50 encoder</td><td>see 4b</td></tr>
+          <tr><td>1 (v3)</td><td class="mono">run_v3_5slice</td><td class="mono">finetune_run002v2_v3_5slice.sh</td><td class="mono">finetune_meniscus_v3_5slice.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none</td><td>5-slice input</td><td>see 4b</td></tr>
+          <tr><td>1 (v4)</td><td class="mono">run_v4_realPD</td><td class="mono">finetune_v4_realPD.sh</td><td class="mono">finetune_meniscus_v4_realPD.py</td><td>run_002_v2</td><td>none</td><td>real_pd_seg_data (8/2)</td><td>real PD only</td><td>D1-8 0.775</td></tr>
+          <tr><td>1 (v4)</td><td class="mono">run_v4_mixed</td><td class="mono">finetune_v4_mixed.sh</td><td class="mono">finetune_meniscus_v4_mixed.py</td><td>run_002_v2</td><td>segmentation_data_v2</td><td>real_pd_seg_data (8/2)</td><td>mixed</td><td>D1-8 0.759</td></tr>
+          <tr><td>1 (v5)</td><td class="mono">run_v5_realPD</td><td class="mono">finetune_v5_realPD.sh</td><td class="mono">finetune_meniscus_v5_realPD.py</td><td>baseline_best_model.pth</td><td>none</td><td>real_pd_seg_data</td><td>real PD only</td><td>D1-8 0.135</td></tr>
+          <tr><td>1 (v5)</td><td class="mono">run_v5_mixed</td><td class="mono">finetune_v5_mixed.sh</td><td class="mono">finetune_meniscus_v5_mixed.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data</td><td>mixed</td><td>D1-8 0.765</td></tr>
+          <tr><td>1 (v7)</td><td class="mono">run_v7_realPD</td><td class="mono">finetune_v7_realPD.sh</td><td class="mono">finetune_meniscus_v5_realPD.py</td><td>baseline_best_model.pth</td><td>none</td><td>real_pd_seg_data_v7 (13/2)</td><td>real PD only, 15 pts</td><td>17pt 0.774</td></tr>
+          <tr><td>1 (v7)</td><td class="mono">run_v7_mixed</td><td class="mono">finetune_v7_mixed.sh</td><td class="mono">finetune_meniscus_v5_mixed.py (commit 64b1020 state)</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>mixed, 15 pts (the SPIE model)</td><td>17pt 0.781</td></tr>
+          <tr><td>2</td><td class="mono">run_v9_mixed</td><td class="mono">finetune_v9_mixed.sh</td><td class="mono">finetune_meniscus_v5_mixed.py (current = v9)</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>restricted CE (bg excluded)</td><td>17pt 0.753</td></tr>
+          <tr><td>2</td><td class="mono">run_v10_boundary</td><td class="mono">finetune_v10_boundary.sh</td><td class="mono">finetune_meniscus_v10_boundary.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>+ boundary loss</td><td>17pt 0.753</td></tr>
+          <tr><td>2</td><td class="mono">run_v11_cldice</td><td class="mono">finetune_v11_cldice.sh</td><td class="mono">finetune_meniscus_v11_cldice.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>+ clDice</td><td>17pt 0.777</td></tr>
+          <tr><td>2</td><td class="mono">run_v12_tversky</td><td class="mono">finetune_v12_tversky.sh</td><td class="mono">finetune_meniscus_v12_tversky.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>Tversky on fake branch</td><td>17pt 0.7755</td></tr>
+          <tr><td>2</td><td class="mono">run_v12_photometric</td><td class="mono">finetune_v12_photometric.sh</td><td class="mono">finetune_meniscus_v12_photometric.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>photometric aug on fake branch</td><td>17pt 0.7671</td></tr>
+          <tr><td>3</td><td class="mono">run_v7_replica_seed42</td><td class="mono">finetune_v7_replica.sh (SEED=42)</td><td class="mono">finetune_meniscus_v7_replica.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>instrumented replica (reference)</td><td>17pt 0.7780</td></tr>
+          <tr><td>4</td><td class="mono">run_v7_replica_seed7</td><td class="mono">finetune_v7_replica.sh (SEED=7)</td><td class="mono">finetune_meniscus_v7_replica.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>seed repeat (noise floor)</td><td>val 0.7860</td></tr>
+          <tr><td>4</td><td class="mono">run_v7_p4</td><td class="mono">finetune_v7_p4.sh</td><td class="mono">finetune_meniscus_v7_p4.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v3</td><td>real_pd_seg_data_v7</td><td>fake stride 4-5 + equalized aug</td><td>17pt 0.7856</td></tr>
+          <tr><td>4</td><td class="mono">run_v7_p2</td><td class="mono">finetune_v7_p2.sh</td><td class="mono">finetune_meniscus_v7_p2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v3 (+negatives index)</td><td>real_pd_seg_data_v7</td><td>negative slices</td><td>17pt 0.7795</td></tr>
+          <tr><td>4</td><td class="mono">run_v7_p1</td><td class="mono">finetune_v7_p1.sh</td><td class="mono">finetune_meniscus_v7_p1.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>real-PD sampler cap</td><td>17pt 0.7489</td></tr>
+          <tr><td>4</td><td class="mono">run_v7_kfold{0..4}</td><td class="mono">finetune_v7_kfold.sh (FOLD=0..4)</td><td class="mono">finetune_meniscus_v7_replica.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7_fold{F}</td><td>5-fold over 15 real pts</td><td>17pt 0.7723 to 0.7827</td></tr>
+          <tr><td>4</td><td class="mono">run_v7_crop</td><td class="mono">finetune_v7_crop.sh</td><td class="mono">finetune_meniscus_v7_replica.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2_crop</td><td>real_pd_seg_data_v7_crop</td><td>fixed crop box (crop_box.json)</td><td>17pt 0.7910</td></tr>
+          <tr><td>4</td><td class="mono">run_v7_sequence</td><td class="mono">finetune_v7_sequence.sh</td><td class="mono">finetune_meniscus_v7_sequence.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>5-slice ConvLSTM sequence model</td><td>17pt 0.7958</td></tr>
+          <tr><td>4</td><td class="mono">run_v7_crop_sequence</td><td class="mono">finetune_v7_crop_sequence.sh</td><td class="mono">finetune_meniscus_v7_sequence.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2_crop</td><td>real_pd_seg_data_v7_crop</td><td>crop + sequence</td><td>17pt 0.8057</td></tr>
+          <tr><td>5 crop</td><td class="mono">run_a3_up_seed42</td><td class="mono">finetune_a3_up.sh</td><td class="mono">finetune_meniscus_v7_crop_seq_a3.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2_crop</td><td>real_pd_seg_data_v7_crop</td><td>A3-up (CE bug)</td><td>17pt 0.8006</td></tr>
+          <tr><td>5 crop</td><td class="mono">run_a3_down_seed42</td><td class="mono">finetune_a3_down.sh</td><td class="mono">finetune_meniscus_v7_crop_seq_a3.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2_crop</td><td>real_pd_seg_data_v7_crop</td><td>A3-down (CE bug)</td><td>17pt 0.7905</td></tr>
+          <tr><td>5 crop</td><td class="mono">run_e1_pos_seed42</td><td class="mono">finetune_e1.sh</td><td class="mono">finetune_meniscus_v7_crop_seq_e1.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2_crop</td><td>real_pd_seg_data_v7_crop</td><td>E1 position channel</td><td>17pt 0.7880</td></tr>
+          <tr><td>5 crop</td><td class="mono">run_e2_film_seed42</td><td class="mono">finetune_e2.sh</td><td class="mono">finetune_meniscus_v7_crop_seq_e2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2_crop</td><td>real_pd_seg_data_v7_crop</td><td>E2 FiLM gating</td><td>17pt 0.8016</td></tr>
+          <tr><td>5 crop</td><td class="mono">run_g2_rim_seed42</td><td class="mono">finetune_g2.sh</td><td class="mono">finetune_meniscus_v7_crop_seq_g2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2_crop</td><td>real_pd_seg_data_v7_crop</td><td>G2 rim loss</td><td>17pt 0.8022</td></tr>
+          <tr><td>5 crop</td><td class="mono">run_d_shape_lamauto_seed42</td><td class="mono">finetune_d.sh (RUN_TAG=auto)</td><td class="mono">finetune_meniscus_v7_crop_seq_d.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2_crop</td><td>real_pd_seg_data_v7_crop</td><td>D area prior</td><td>17pt 0.7997</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_a3_up_seed42</td><td class="mono">finetune_2_5d_a3_up.sh</td><td class="mono">finetune_meniscus_v7_replica_a3.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>A3-up v1 (CE bug)</td><td>17pt 0.7569</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_a3_down_seed42</td><td class="mono">finetune_2_5d_a3_down.sh</td><td class="mono">finetune_meniscus_v7_replica_a3.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>A3-down v1 (CE bug)</td><td>17pt 0.7634</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_a3v2_none_seed42</td><td class="mono">finetune_2_5d_a3_v2_none.sh</td><td class="mono">finetune_meniscus_v7_replica_a3_v2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>CE-fix control</td><td>17pt 0.7589</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_a3v2_up_seed42</td><td class="mono">finetune_2_5d_a3_v2_up.sh</td><td class="mono">finetune_meniscus_v7_replica_a3_v2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>A3v2-up</td><td>17pt 0.7590</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_a3v2_down_seed42</td><td class="mono">finetune_2_5d_a3_v2_down.sh</td><td class="mono">finetune_meniscus_v7_replica_a3_v2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>A3v2-down</td><td>17pt 0.7616</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_e1_seed42</td><td class="mono">finetune_2_5d_e1.sh</td><td class="mono">finetune_meniscus_v7_replica_e1.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>E1</td><td>17pt 0.7832</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_e2_seed42</td><td class="mono">finetune_2_5d_e2.sh</td><td class="mono">finetune_meniscus_v7_replica_e2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>E2</td><td>17pt 0.7683</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_g2_seed42</td><td class="mono">finetune_2_5d_g2.sh</td><td class="mono">finetune_meniscus_v7_replica_g2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>G2</td><td>17pt 0.7759</td></tr>
+          <tr><td>5 plain</td><td class="mono">run_2_5d_d_lamauto_seed42</td><td class="mono">finetune_2_5d_d.sh (RUN_TAG=auto)</td><td class="mono">finetune_meniscus_v7_replica_d.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>D (uncropped prior)</td><td>17pt 0.7766</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_base_seed42</td><td class="mono">fakeonly_base.sh</td><td class="mono">finetune_meniscus_fakeonly_base.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>base, seed 42</td><td>17pt 0.6725</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_base_seed7</td><td class="mono">fakeonly_base.sh (SEED=7)</td><td class="mono">finetune_meniscus_fakeonly_base.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>base, seed 7</td><td>17pt 0.6468</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_a3_none_seed42</td><td class="mono">fakeonly_a3_none.sh</td><td class="mono">finetune_meniscus_fakeonly_a3.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>A3v2-none</td><td>17pt 0.6410</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_a3_up_seed42</td><td class="mono">fakeonly_a3_up.sh</td><td class="mono">finetune_meniscus_fakeonly_a3.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>A3-up</td><td>17pt 0.6638</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_a3_down_seed42</td><td class="mono">fakeonly_a3_down.sh</td><td class="mono">finetune_meniscus_fakeonly_a3.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>A3-down</td><td>17pt 0.6421</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_e1_seed42</td><td class="mono">fakeonly_e1.sh</td><td class="mono">finetune_meniscus_fakeonly_e1.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>E1</td><td>17pt 0.6917</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_e2_seed42</td><td class="mono">fakeonly_e2.sh</td><td class="mono">finetune_meniscus_fakeonly_e2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>E2</td><td>17pt 0.6476</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_g2_seed42</td><td class="mono">fakeonly_g2.sh</td><td class="mono">finetune_meniscus_fakeonly_g2.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>G2</td><td>17pt 0.6811</td></tr>
+          <tr><td>Run 3</td><td class="mono">run_fakeonly_d_seed42</td><td class="mono">fakeonly_d.sh</td><td class="mono">finetune_meniscus_fakeonly_d.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>none (fake-val selection)</td><td>D</td><td>17pt 0.6780</td></tr>
+          <tr><td>Control</td><td class="mono">run_imagenet_control_lr1e-4</td><td class="mono">finetune_imagenet_control.sh (LR=1e-4)</td><td class="mono">finetune_meniscus_imagenet_control.py</td><td>ImageNet encoder</td><td>none</td><td>real_pd_seg_data_v7</td><td>real PD only, ImageNet init</td><td>17pt 0.8143</td></tr>
+          <tr><td>Control</td><td class="mono">run_cyclegan_&lt;TAG&gt;</td><td class="mono">train_cyclegan_baseline.sh → translate_cyclegan_baseline.sh → prep_cyclegan_seg_data.sh → finetune_cyclegan_baseline.sh</td><td class="mono">train_cyclegan.py, finetune_meniscus_v7_replica.py</td><td>baseline_best_model.pth</td><td>segmentation_data_cyclegan_&lt;TAG&gt;</td><td>real_pd_seg_data_v7</td><td>CycleGAN translation instead of RegGAN, replica recipe</td><td>not in local repo</td></tr>
+          <tr><td>Control</td><td class="mono">nnU-Net B1 / B2</td><td class="mono">setup_nnunet_baseline.sh, train_nnunet_baseline.sh (CONFIG=2d / 3d_fullres), infer_eval_nnunet_baseline.sh</td><td class="mono">nnU-Net + scripts/eval_nnunet_predictions.py</td><td>nnU-Net default</td><td>none</td><td>13/2 split exported</td><td>nnU-Net 2D / 3D</td><td>not in local repo</td></tr>
+          <tr><td>6</td><td class="mono">run_v13_slab_e50</td><td class="mono">finetune_v13_slab.sh</td><td class="mono">finetune_meniscus_v13_slab.py</td><td>baseline_best_model.pth</td><td>segmentation_data_v4_slab (prepare_slab_fake_pd.py)</td><td>real_pd_seg_data_v7</td><td>N1 slab fake PD, soft labels</td><td>17pt 0.7906</td></tr>
+          <tr><td>6</td><td class="mono">run_v14_tear_R1_int_seed42</td><td class="mono">finetune_v14_tear_R1_interactive.sh (gpu-interactive)</td><td class="mono">finetune_meniscus_v14_tear_amodal.py --tear_synth</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>synthetic tears</td><td>pending</td></tr>
+          <tr><td>6</td><td class="mono">run_v14_tear_R1_seed42</td><td class="mono">finetune_v14_tear_amodal.sh (VARIANT=R1)</td><td class="mono">finetune_meniscus_v14_tear_amodal.py --tear_synth</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>v14 R1</td><td>pending</td></tr>
+          <tr><td>6</td><td class="mono">run_v14_tear_R2_seed42</td><td class="mono">finetune_v14_tear_amodal.sh (VARIANT=R2)</td><td class="mono">finetune_meniscus_v14_tear_amodal.py + --visible_head</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>v14 R2</td><td>pending</td></tr>
+          <tr><td>6</td><td class="mono">run_v14_tear_R3_seed42</td><td class="mono">finetune_v14_tear_amodal.sh (VARIANT=R3)</td><td class="mono">finetune_meniscus_v14_tear_amodal.py + --visible_head --contour_head</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>v14 R3</td><td>pending</td></tr>
+          <tr><td>6</td><td class="mono">run_v14_tear_R4_seed42</td><td class="mono">finetune_v14_tear_amodal.sh (VARIANT=R4)</td><td class="mono">finetune_meniscus_v14_tear_amodal.py + visible, contour, --inclusion</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>v14 R4</td><td>pending</td></tr>
+          <tr><td>6</td><td class="mono">run_v14_tear_R1c_seed42</td><td class="mono">finetune_v14_tear_amodal.sh (VARIANT=R1c)</td><td class="mono">finetune_meniscus_v14_tear_amodal.py --tear_synth --contour_head</td><td>baseline_best_model.pth</td><td>segmentation_data_v2</td><td>real_pd_seg_data_v7</td><td>v14 R1c</td><td>pending</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Script/data facts above</strong> were read from the <code>python ...</code> and <code>*_DATA=</code> lines of each job file in <code>slurm_files/</code> on 2026-10-19. "(see job)" = the job file runs more than one Python step; open it for the exact training call. Results: 17pt values recomputed from <code>results/real_pd_predictions_*_17pt</code> with the Phase 5 notebook's Dice code; Phase 1 values from the earlier sections of this log.</div>
+  </div>
+
+  <!-- Commits -->
+  <div class="section" id="commits">
+    <h2>Git Commits by Phase</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Commit</th><th>What it contains</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">64b1020</td><td>SPIE-submission state of <code>finetune_meniscus_v5_mixed.py</code>: the v7/v8 loss the replica reproduces</td></tr>
+          <tr><td class="mono">c8a4c17, cfdc6b6, c1c603e, 72129c1</td><td>Phase 4 results doc; P4 (stride + equalized aug); P1 (sampler cap); steps 7-9 running</td></tr>
+          <tr><td class="mono">0b4f818, 3799336, e3d94e4</td><td>P4 / P1 results; k-fold, weight-avg, TTA, 17pt confirmation; P2 script + <code>--tta</code> flag</td></tr>
+          <tr><td class="mono">e805f75, 53572d8, f0303be, c6a42bf</td><td>ConvLSTM sequence model + crop inference; k-fold / crop / averaging tooling; Phase 4 evidence notebook; run histories</td></tr>
+          <tr><td class="mono">e72c994, f60c6fe</td><td>Crop box coverage on 17pt verified; sequence checkpoint loading fix + crop-space inference</td></tr>
+          <tr><td class="mono">2412721, 9719d45, 70c0bb5, d7c1338, 5d579ee, c4b8bf1</td><td>Phase 5 crop arm: G2, A3, E1, E2, D; implementation spec doc</td></tr>
+          <tr><td class="mono">7a73ece, bd1f464</td><td>Manual Slicer review of replica predictions; crop+sequence / sequence results</td></tr>
+          <tr><td class="mono">905e50f, 7836c7c</td><td>Phase 5 plain 2.5D arm; A3 v2 CE-normalisation fix</td></tr>
+          <tr><td class="mono">14a9695, d02d0f1</td><td>Run 3 fake-only arm; its analysis notebook + 17pt inference jobs</td></tr>
+          <tr><td class="na">not committed yet</td><td>ImageNet control, CycleGAN / nnU-Net baselines, v13 slab, torn-cohort jobs and notebook, all v14 tear-amodal files (see <code>git status</code>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Conventions -->
+  <div class="section" id="conventions">
+    <h2>Naming and Selection Conventions</h2>
+    <ul class="lessons">
+      <li><strong>v-numbers:</strong> v1-v7 = training recipe versions; <strong>v8</strong> = the label for inference on the 17pt cohort (no new training); v9-v12 = Phase 2 loss/aug retrains; v13 = slab (N1); v14 = tear-amodal.</li>
+      <li><strong>Phase 5 arms:</strong> <code>run_&lt;idea&gt;_seed42</code> = crop+sequence arm; <code>run_2_5d_&lt;idea&gt;_seed42</code> = plain 2.5D (replica) arm; <code>run_fakeonly_&lt;idea&gt;_seed42</code> = Run 3. <code>lamauto</code> = D with the auto-calibrated weight.</li>
+      <li><strong>Predictions:</strong> <code>results/real_pd_predictions_&lt;run&gt;_17pt</code> (healthy test set), <code>results/torn_predictions_&lt;run&gt;</code> (5 held-out torn patients), <code>real_pd_predictions_control_20pt</code> (earlier 20-pt cohort run).</li>
+      <li><strong>Checkpoint selection:</strong> replica-recipe runs select <code>ckpt_best.pth</code> on the pooled real-val Dice (<code>vd</code>, 2 val patients); Run 3 selects on fake val only; v14 selects on clean real val (no synthetic tears).</li>
+      <li><strong>Judging threshold:</strong> per-patient noise floor 0.0226 (seed 42 vs 7); in Run 3 the seed spread of the mean is 0.0257.</li>
+      <li><strong>Held-out sets:</strong> 17pt test (D1 + New) never trained on; 5 torn patients never trained on (v14 script enforces it).</li>
+    </ul>
   </div>
 
   <!-- 5. Inference Table -->
@@ -747,6 +1033,23 @@
         </tbody>
       </table>
     </div>
+
+    <h3>Phase 4 to 6 on the 17 test patients</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Script</th><th>Checkpoint(s)</th><th>Output Dir</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">infer_phase4_17pt.sh</td><td class="mono">run_v7_replica_seed42, run_v7_p4, run_v7_p1, run_v7_p2</td><td class="mono">real_pd_predictions_{replica_seed42,p4,p1,p2}_17pt</td></tr>
+          <tr><td class="mono">infer_kfold_17pt.sh</td><td class="mono">kfold0 to kfold4</td><td class="mono">real_pd_predictions_kfold{0..4}_17pt</td></tr>
+          <tr><td class="mono">infer_crop_17pt.sh / infer_crop_sequence_17pt.sh</td><td class="mono">run_v7_crop, run_v7_crop_sequence</td><td class="mono">real_pd_predictions_crop_17pt, ..._crop_sequence_17pt</td></tr>
+          <tr><td class="mono">infer_experiments_batch.sh, infer_g2_17pt_test.sh, infer_d_17pt.sh</td><td class="mono">crop arm A3 / E1 / E2 / G2 / D</td><td class="mono">real_pd_predictions_{a3_up,a3_down,e1_pos,e2_film,g2_rim,d_shape}_17pt</td></tr>
+          <tr><td class="mono">infer_2_5d_*_17pt.sh</td><td class="mono">plain arm A3 v1 / A3v2 / E1 / E2 / G2 / D</td><td class="mono">real_pd_predictions_2_5d_*_17pt</td></tr>
+          <tr><td class="mono">infer_fakeonly_*_17pt.sh</td><td class="mono">Run 3 fake-only arm</td><td class="mono">real_pd_predictions_fakeonly_*_17pt</td></tr>
+          <tr><td class="mono">infer_imagenet_control_17pt.sh</td><td class="mono">run_imagenet_control_lr1e-4</td><td class="mono">real_pd_predictions_run_imagenet_control_lr1e-4_17pt</td></tr>
+          <tr><td class="mono">(v13 slab)</td><td class="mono">run_v13_slab_e50</td><td class="mono">real_pd_predictions_run_v13_slab_e50_17pt</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- 6. Summary -->
@@ -775,6 +1078,10 @@
       <li>clDice (v11) wins the most individual patients (7/17) — best topology-aware loss tried so far</li>
       <li>v10_boundary severely hurt AC07607B9E5295 (−0.163) — boundary loss is anatomy-dependent</li>
       <li>Real PD alone from DESS baseline collapses (v5_realPD: 0.135) — always pair with fake PD for warm-start</li>
+      <li>BUT real PD alone from an <strong>ImageNet</strong> encoder reaches 0.8143 on 17pt (above replica 0.7780 and crop+seq 0.8057) — the pipeline's value has to be re-argued (label efficiency, fewer real patients)</li>
+      <li>Crop + sequence (0.8057) is the only change on the replica recipe confirmed above the 0.0226 noise floor</li>
+      <li>Position-aware ideas (A3, E1, E2, D) and the rim loss (G2) gave no real gain in any arm (crop+seq, plain 2.5D, fake-only)</li>
+      <li>The 17pt test set has been read many times; treat these as exploratory and do one frozen, clean read for the paper</li>
     </ul>
   </div>
 
