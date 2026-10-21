@@ -1,0 +1,413 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Phase 5 Replica-Arm Log</title>
+<meta name="description" content="Five novel-approach experiments for DESS→PD meniscus segmentation, tested independently against the plain replica baseline.">
+<style>
+  :root{
+    --ink:#1c2430; --ink-soft:#525a68;
+    --paper:#f7f6f2; --surface:#ffffff; --surface-2:#f0eee8;
+    --border:#e1ddd3;
+    --accent:#2b6777; --accent-soft:#dbe9ea; --accent-ink:#153c46;
+    --gain:#2f7d4f; --gain-soft:#dcefe1;
+    --noise:#8c8477; --noise-soft:#ece8de;
+    --loss:#9a4a3e; --loss-soft:#f3e3df;
+    --mono: 'IBM Plex Mono', ui-monospace, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ink:#e9e6df; --ink-soft:#aba699;
+      --paper:#14171b; --surface:#1b1f24; --surface-2:#20242a;
+      --border:#2c313a;
+      --accent:#7ab8c4; --accent-soft:#1f333a; --accent-ink:#bfe3ea;
+      --gain:#6fbf8a; --gain-soft:#173226;
+      --noise:#9c9587; --noise-soft:#24211b;
+      --loss:#d68b7c; --loss-soft:#331f1c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ink:#e9e6df; --ink-soft:#aba699;
+    --paper:#14171b; --surface:#1b1f24; --surface-2:#20242a;
+    --border:#2c313a;
+    --accent:#7ab8c4; --accent-soft:#1f333a; --accent-ink:#bfe3ea;
+    --gain:#6fbf8a; --gain-soft:#173226;
+    --noise:#9c9587; --noise-soft:#24211b;
+    --loss:#d68b7c; --loss-soft:#331f1c;
+    color-scheme: dark;
+  }
+
+  * { box-sizing:border-box; }
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:'Source Sans 3', Inter, -apple-system, sans-serif;
+    font-size:16px; line-height:1.6;
+    padding-inline:20px;
+  }
+  .wrap{ max-width:900px; margin:0 auto; padding-block:48px 80px; }
+
+  h1,h2,h3{ font-family:'Fraunces', Georgia, serif; text-wrap:balance; color:var(--ink); }
+  h1{ font-size:clamp(28px,5vw,42px); font-weight:600; margin:0 0 6px; letter-spacing:-.01em; }
+  h2{ font-size:24px; font-weight:600; margin:0 0 4px; }
+  h3{ font-size:18px; font-weight:600; margin:0; }
+
+  .kicker{
+    font-family:'Fraunces', serif; font-style:italic; font-size:15px;
+    color:var(--accent-ink); margin:0 0 14px;
+  }
+  .meta{ color:var(--ink-soft); font-size:14.5px; margin:0 0 40px; }
+  .meta code{ font-family:var(--mono); background:var(--surface-2); padding:1px 6px; border-radius:4px; font-size:13px; }
+
+  section{ margin-top:56px; }
+  section > h2{ padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:22px; }
+  .section-num{ color:var(--accent); font-family:var(--mono); font-size:14px; font-weight:600; margin-right:10px; }
+
+  p{ margin:0 0 14px; max-width:68ch; }
+  p:last-child{ margin-bottom:0; }
+
+  .glossary{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px;
+    margin-top:8px;
+  }
+  .term{
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:14px 16px;
+  }
+  .term dt{ font-family:var(--mono); font-weight:600; font-size:13.5px; color:var(--accent-ink); margin-bottom:4px; }
+  .term dd{ margin:0; font-size:14.5px; color:var(--ink-soft); }
+
+  .noise-floor{
+    display:flex; gap:14px; align-items:flex-start;
+    background:var(--noise-soft); border:1px solid var(--border); border-radius:10px;
+    padding:16px 18px; margin-top:18px;
+  }
+  .noise-floor .num{
+    font-family:var(--mono); font-weight:600; font-size:22px; color:var(--ink);
+    white-space:nowrap;
+  }
+  .noise-floor p{ margin:0; font-size:14.5px; color:var(--ink-soft); }
+
+  .approach{
+    background:var(--surface); border:1px solid var(--border); border-radius:14px;
+    padding:24px 26px; margin-bottom:20px;
+  }
+  .approach-head{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+  .approach-id{
+    font-family:var(--mono); font-size:13px; font-weight:600;
+    background:var(--accent-soft); color:var(--accent-ink);
+    padding:3px 9px; border-radius:6px; letter-spacing:.02em;
+  }
+  .approach p{ color:var(--ink-soft); font-size:15px; }
+  .approach .variant-note{
+    font-size:13.5px; color:var(--ink-soft); background:var(--surface-2);
+    border-left:3px solid var(--accent); padding:10px 14px; border-radius:0 8px 8px 0; margin-top:12px;
+  }
+
+  .stat-row{ display:flex; flex-wrap:wrap; gap:10px; margin-top:16px; }
+  .stat{
+    flex:1; min-width:88px;
+    background:var(--surface-2); border-radius:8px; padding:10px 12px;
+    text-align:center;
+  }
+  .stat .label{ font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); }
+  .stat .value{ font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:17px; font-weight:600; margin-top:2px; }
+  .stat.variant-label{ flex-basis:100%; text-align:left; background:none; padding:2px 0 0; font-size:13px; color:var(--ink-soft); font-family:var(--mono); }
+
+  .chart-card{
+    background:var(--surface); border:1px solid var(--border); border-radius:14px;
+    padding:24px 20px 12px; margin-top:20px;
+  }
+  .chart-card svg{ width:100%; height:auto; display:block; }
+  .legend{ display:flex; gap:20px; flex-wrap:wrap; font-size:13px; color:var(--ink-soft); margin-top:10px; padding:0 4px; }
+  .legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .swatch{ width:11px; height:11px; border-radius:3px; display:inline-block; }
+
+  .table-wrap{ overflow-x:auto; margin-top:20px; border:1px solid var(--border); border-radius:12px; }
+  table{ width:100%; border-collapse:collapse; font-size:14.5px; min-width:680px; }
+  thead th{
+    text-align:right; font-family:var(--mono); font-weight:600; font-size:12px;
+    text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft);
+    background:var(--surface-2); padding:12px 14px; border-bottom:1px solid var(--border);
+  }
+  thead th:first-child{ text-align:left; }
+  tbody td{ text-align:right; padding:11px 14px; font-family:var(--mono); font-variant-numeric:tabular-nums; border-bottom:1px solid var(--border); }
+  tbody td:first-child{ text-align:left; font-family:'Source Sans 3',sans-serif; font-weight:600; }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr.baseline-row td{ background:var(--surface-2); font-weight:600; }
+  tbody tr.gain-row td{ background:var(--gain-soft); }
+  tbody tr:hover td{ background:var(--accent-soft); }
+  .verdict-pill{
+    display:inline-block; font-family:var(--mono); font-size:11px; font-weight:600;
+    padding:2px 8px; border-radius:20px; letter-spacing:.02em;
+  }
+  .verdict-pill.gain{ background:var(--gain-soft); color:var(--gain); }
+  .verdict-pill.noise{ background:var(--noise-soft); color:var(--noise); }
+
+  .conclusion{
+    background:var(--surface); border:1px solid var(--border); border-radius:14px;
+    padding:26px 28px;
+  }
+  .conclusion .headline{
+    font-family:'Fraunces',serif; font-size:19px; font-weight:600; margin-bottom:10px;
+    color:var(--ink);
+  }
+  .conclusion .headline .accent{ color:var(--gain); }
+  ul.findings{ margin:14px 0 0; padding-left:20px; }
+  ul.findings li{ margin-bottom:10px; font-size:15px; color:var(--ink-soft); }
+  ul.findings li::marker{ color:var(--accent); }
+  ul.findings strong{ color:var(--ink); }
+
+  footer{ margin-top:60px; padding-top:20px; border-top:1px solid var(--border); font-size:12.5px; color:var(--ink-soft); }
+
+  @media (max-width:560px){
+    .stat-row{ gap:8px; }
+    .stat{ min-width:70px; padding:8px 6px; }
+    .stat .value{ font-size:15px; }
+  }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+
+<div class="wrap">
+
+  <p class="kicker">DESS → PD meniscus segmentation — experiment log</p>
+  <h1>Phase 5, replica arm</h1>
+  <p class="meta">Five novel training-time approaches, each tested as exactly one change against the plain replica recipe (<code>run_v7_replica_seed42</code>) — independent of the crop+sequence checkpoint used elsewhere in this project.</p>
+
+  <section>
+    <h2><span class="section-num">01</span>How to read the numbers below</h2>
+    <dl class="glossary">
+      <div class="term"><dt>Dice score</dt><dd>Overlap between the model's predicted meniscus and the human-drawn ground truth, from 0 (no overlap) to 1 (perfect match).</dd></div>
+      <div class="term"><dt>Val real</dt><dd>Dice on the 2 real-patient MRI scans held out for validation during training. Used to pick the "best" checkpoint.</dd></div>
+      <div class="term"><dt>Val fake</dt><dd>Dice on the synthetic (RegGAN-translated) validation scans, from the same training run.</dd></div>
+      <div class="term"><dt>Test 17pt</dt><dd>Dice on 17 real-patient scans held out entirely from training — the most trustworthy number, never seen during model selection.</dd></div>
+      <div class="term"><dt>Best epoch</dt><dd>Which training checkpoint was kept — the one with the highest val-real Dice.</dd></div>
+      <div class="term"><dt>Gap</dt><dd>Train Dice minus val Dice on real PD. A larger gap means more overfitting to the 13 training patients.</dd></div>
+    </dl>
+    <div class="noise-floor">
+      <div class="num">±0.0226</div>
+      <p><strong>Noise floor.</strong> Measured by training the exact same replica recipe twice with different random seeds and taking the largest per-patient Dice difference. Any change smaller than this cannot be told apart from ordinary run-to-run randomness — it is the bar every result below is judged against.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="section-num">02</span>The five approaches</h2>
+    <p>Each targets a different piece of information the base model doesn't explicitly use: where a slice sits in the scan, what the tissue should look like, or how big the meniscus should be.</p>
+
+    <div class="approach">
+      <div class="approach-head"><h3>A3 — Position-weighted loss</h3><span class="approach-id">up / down</span></div>
+      <p>The meniscus is easiest to see mid-scan and hardest right at the slices where it first appears or disappears. This approach makes mistakes on those edge slices count for more (<strong>up</strong>, weighted up to 2×) or for less (<strong>down</strong>, weighted down to 0.3×) during training, to see whether emphasizing or de-emphasizing the hard cases helps.</p>
+      <div class="variant-note">A coding bug in the first attempt (v1) meant the edge-slice weighting wasn't applied at the intended strength. It was corrected in v2, together with a <strong>control</strong> run (weights left at 1×) so the fix's effect could be isolated from the weighting itself.</div>
+      <div class="stat-row">
+        <div class="stat variant-label">A3-up, v1 (bug present)</div>
+        <div class="stat"><div class="label">Val real</div><div class="value">0.7515</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7541</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7569</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">10</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.1074</div></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat variant-label">A3-down, v1 (bug present)</div>
+        <div class="stat"><div class="label">Val real</div><div class="value">0.7486</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7548</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7634</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">6</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.0930</div></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat variant-label">A3v2-none, control (bug fixed, 1× weights)</div>
+        <div class="stat"><div class="label">Val real</div><div class="value">0.7571</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7543</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7589</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">23</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.1234</div></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat variant-label">A3v2-up, v2 (bug fixed)</div>
+        <div class="stat"><div class="label">Val real</div><div class="value">0.7485</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7564</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7590</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">23</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.1351</div></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat variant-label">A3v2-down, v2 (bug fixed)</div>
+        <div class="stat"><div class="label">Val real</div><div class="value">0.6371</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7452</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7616</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">7</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.1723</div></div>
+      </div>
+    </div>
+
+    <div class="approach">
+      <div class="approach-head"><h3>E1 — Position as an input channel</h3><span class="approach-id">position channel</span></div>
+      <p>Gives the model one extra piece of information alongside the image: a number from 0 (scan centre) to 1 (outer edge) telling it exactly where this slice sits in the volume, in case that helps it anticipate the expected meniscus shape.</p>
+      <div class="stat-row">
+        <div class="stat"><div class="label">Val real</div><div class="value">0.7701</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7701</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7832</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">14</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.1623</div></div>
+      </div>
+    </div>
+
+    <div class="approach">
+      <div class="approach-head"><h3>E2 — Position via feature gating</h3><span class="approach-id">FiLM</span></div>
+      <p>The same position information as E1, but instead of adding it as an extra image channel, it's used to gently rescale the model's internal features right before it makes its prediction (a technique called FiLM).</p>
+      <div class="stat-row">
+        <div class="stat"><div class="label">Val real</div><div class="value">0.7869</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7565</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7683</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">14</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.1450</div></div>
+      </div>
+    </div>
+
+    <div class="approach">
+      <div class="approach-head"><h3>G2 — Rim-darkness prior</h3><span class="approach-id">intensity loss</span></div>
+      <p>Real meniscus tissue is normally darker than the rim of tissue directly around it. This adds a training penalty whenever the model's predicted region doesn't actually look darker than its surroundings, nudging predictions toward physically plausible tissue.</p>
+      <div class="stat-row">
+        <div class="stat"><div class="label">Val real</div><div class="value">0.7855</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7540</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7759</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">11</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.1343</div></div>
+      </div>
+    </div>
+
+    <div class="approach">
+      <div class="approach-head"><h3>D — Shape / area prior</h3><span class="approach-id">size loss</span></div>
+      <p>Learns the typical meniscus size at each position along the scan from the training data, then penalizes predictions whose size deviates strongly from what's typical at that position.</p>
+      <div class="stat-row">
+        <div class="stat"><div class="label">Val real</div><div class="value">0.7778</div></div>
+        <div class="stat"><div class="label">Val fake</div><div class="value">0.7605</div></div>
+        <div class="stat"><div class="label">Test 17pt</div><div class="value">0.7766</div></div>
+        <div class="stat"><div class="label">Best ep</div><div class="value">13</div></div>
+        <div class="stat"><div class="label">Gap</div><div class="value">0.1532</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="section-num">03</span>All runs, side by side</h2>
+    <p>Baseline is <strong>replica</strong> (no changes). <strong>Crop+sequence</strong> is a separate, unrelated recipe shown for scale — it stacks two changes (a tighter crop + a 5-slice sequence model) rather than testing one idea in isolation, and is the only run in this project confirmed to beat the baseline by more than the noise floor.</p>
+
+    <div class="chart-card">
+      <svg viewBox="0 0 880 340" role="img" aria-label="Test 17-patient Dice score per run">
+        <!-- gridlines -->
+        <g font-family="IBM Plex Mono" font-size="11" fill="var(--ink-soft)">
+          <line x1="60" y1="248" x2="860" y2="248" stroke="var(--border)"/>
+          <text x="52" y="252" text-anchor="end">0.74</text>
+          <line x1="60" y1="196" x2="860" y2="196" stroke="var(--border)"/>
+          <text x="52" y="200" text-anchor="end">0.76</text>
+          <line x1="60" y1="144" x2="860" y2="144" stroke="var(--border)"/>
+          <text x="52" y="148" text-anchor="end">0.78</text>
+          <line x1="60" y1="92" x2="860" y2="92" stroke="var(--border)"/>
+          <text x="52" y="96" text-anchor="end">0.80</text>
+          <line x1="60" y1="40" x2="860" y2="40" stroke="var(--border)"/>
+          <text x="52" y="44" text-anchor="end">0.82</text>
+          <line x1="60" y1="300" x2="860" y2="300" stroke="var(--ink-soft)"/>
+        </g>
+
+        <!-- baseline reference line -->
+        <line x1="60" y1="149" x2="860" y2="149" stroke="var(--accent)" stroke-dasharray="4 4" stroke-width="1.5"/>
+
+        <!-- bars: x, width=62, value->y via y=300-(v-0.72)/0.10*260 -->
+        <g font-family="IBM Plex Mono" font-size="12" font-weight="600">
+          <!-- replica baseline -->
+          <rect x="60"  y="149.2" width="62" height="150.8" fill="var(--noise)" opacity="0.55"/>
+          <text x="91"  y="139.2" text-anchor="middle" fill="var(--ink)">0.7780</text>
+          <!-- crop+sequence -->
+          <rect x="134" y="77.2"  width="62" height="222.8" fill="var(--gain)"/>
+          <text x="165" y="67.2"  text-anchor="middle" fill="var(--gain)">0.8057</text>
+          <!-- A3-up v1 -->
+          <rect x="208" y="204.1" width="62" height="95.9" fill="var(--noise)"/>
+          <text x="239" y="194.1" text-anchor="middle" fill="var(--ink-soft)">0.7569</text>
+          <!-- A3-down v1 -->
+          <rect x="282" y="187.2" width="62" height="112.8" fill="var(--noise)"/>
+          <text x="313" y="177.2" text-anchor="middle" fill="var(--ink-soft)">0.7634</text>
+          <!-- A3v2-none -->
+          <rect x="356" y="198.9" width="62" height="101.1" fill="var(--noise)"/>
+          <text x="387" y="188.9" text-anchor="middle" fill="var(--ink-soft)">0.7589</text>
+          <!-- A3v2-up -->
+          <rect x="430" y="198.6" width="62" height="101.4" fill="var(--noise)"/>
+          <text x="461" y="188.6" text-anchor="middle" fill="var(--ink-soft)">0.7590</text>
+          <!-- A3v2-down -->
+          <rect x="504" y="191.8" width="62" height="108.2" fill="var(--noise)"/>
+          <text x="535" y="181.8" text-anchor="middle" fill="var(--ink-soft)">0.7616</text>
+          <!-- E1 -->
+          <rect x="578" y="135.7" width="62" height="164.3" fill="var(--noise)"/>
+          <text x="609" y="125.7" text-anchor="middle" fill="var(--ink-soft)">0.7832</text>
+          <!-- E2 -->
+          <rect x="652" y="174.4" width="62" height="125.6" fill="var(--noise)"/>
+          <text x="683" y="164.4" text-anchor="middle" fill="var(--ink-soft)">0.7683</text>
+          <!-- G2 -->
+          <rect x="726" y="154.7" width="62" height="145.3" fill="var(--noise)"/>
+          <text x="757" y="144.7" text-anchor="middle" fill="var(--ink-soft)">0.7759</text>
+          <!-- D -->
+          <rect x="800" y="152.8" width="62" height="147.2" fill="var(--noise)"/>
+          <text x="831" y="142.8" text-anchor="middle" fill="var(--ink-soft)">0.7766</text>
+        </g>
+
+        <!-- x labels -->
+        <g font-family="IBM Plex Mono" font-size="11" fill="var(--ink-soft)">
+          <text x="91"  y="316" text-anchor="middle">replica</text>
+          <text x="165" y="316" text-anchor="middle">crop+seq</text>
+          <text x="239" y="316" text-anchor="middle">A3-up v1</text>
+          <text x="313" y="316" text-anchor="middle">A3-down v1</text>
+          <text x="387" y="316" text-anchor="middle">A3v2-none</text>
+          <text x="461" y="316" text-anchor="middle">A3v2-up</text>
+          <text x="535" y="316" text-anchor="middle">A3v2-down</text>
+          <text x="609" y="316" text-anchor="middle">E1</text>
+          <text x="683" y="316" text-anchor="middle">E2</text>
+          <text x="757" y="316" text-anchor="middle">G2</text>
+          <text x="831" y="316" text-anchor="middle">D</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--noise);opacity:.55"></i>replica baseline</span>
+        <span><i class="swatch" style="background:var(--gain)"></i>clears the noise floor (real gain)</span>
+        <span><i class="swatch" style="background:var(--noise)"></i>within ±0.0226 of baseline (no measurable effect)</span>
+        <span>┄ dashed line = baseline test Dice (0.7780)</span>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Val real</th><th>Val fake</th><th>Test 17pt</th><th>Best ep</th><th>Gap</th><th>vs. baseline</th></tr>
+        </thead>
+        <tbody>
+          <tr class="baseline-row"><td>replica (baseline)</td><td>0.7809</td><td>0.7598</td><td>0.7780</td><td>10</td><td>0.1438</td><td>—</td></tr>
+          <tr class="gain-row"><td>crop+sequence</td><td>0.8067</td><td>0.7715</td><td>0.8057</td><td>12</td><td>0.1230</td><td><span class="verdict-pill gain">+0.0277 gain</span></td></tr>
+          <tr><td>A3-up v1 (bug)</td><td>0.7515</td><td>0.7541</td><td>0.7569</td><td>10</td><td>0.1074</td><td><span class="verdict-pill noise">−0.0211 noise</span></td></tr>
+          <tr><td>A3-down v1 (bug)</td><td>0.7486</td><td>0.7548</td><td>0.7634</td><td>6</td><td>0.0930</td><td><span class="verdict-pill noise">−0.0146 noise</span></td></tr>
+          <tr><td>A3v2-none (control)</td><td>0.7571</td><td>0.7543</td><td>0.7589</td><td>23</td><td>0.1234</td><td><span class="verdict-pill noise">−0.0191 noise</span></td></tr>
+          <tr><td>A3v2-up (fixed)</td><td>0.7485</td><td>0.7564</td><td>0.7590</td><td>23</td><td>0.1351</td><td><span class="verdict-pill noise">−0.0190 noise</span></td></tr>
+          <tr><td>A3v2-down (fixed)</td><td>0.6371</td><td>0.7452</td><td>0.7616</td><td>7</td><td>0.1723</td><td><span class="verdict-pill noise">−0.0164 noise</span></td></tr>
+          <tr><td>E1 (position channel)</td><td>0.7701</td><td>0.7701</td><td>0.7832</td><td>14</td><td>0.1623</td><td><span class="verdict-pill noise">+0.0051 noise</span></td></tr>
+          <tr><td>E2 (FiLM gating)</td><td>0.7869</td><td>0.7565</td><td>0.7683</td><td>14</td><td>0.1450</td><td><span class="verdict-pill noise">−0.0097 noise</span></td></tr>
+          <tr><td>G2 (rim-darkness)</td><td>0.7855</td><td>0.7540</td><td>0.7759</td><td>11</td><td>0.1343</td><td><span class="verdict-pill noise">−0.0022 noise</span></td></tr>
+          <tr><td>D (shape prior)</td><td>0.7778</td><td>0.7605</td><td>0.7766</td><td>13</td><td>0.1532</td><td><span class="verdict-pill noise">−0.0015 noise</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="section-num">04</span>Conclusion</h2>
+    <div class="conclusion">
+      <p class="headline">Of six changes tested against the plain replica baseline, only <span class="accent">crop+sequence</span> produced a real improvement.</p>
+      <ul class="findings">
+        <li><strong>Crop+sequence</strong> is the sole run whose test-Dice gain (+0.0277) exceeds the ±0.0226 noise floor — consistent across val real (+0.026), val fake (+0.012), and test (+0.028).</li>
+        <li><strong>All five novel approaches</strong> — A3 (both weighting directions), E1, E2, G2, D — land inside the noise floor on test Dice when tested as a single isolated change. None is distinguishable from run-to-run randomness.</li>
+        <li><strong>A3v2-up vs. its own control (A3v2-none)</strong> differ by only 0.0001 test Dice — with the v1 loss-normalisation bug fixed, position-weighting the loss has no measurable effect either direction.</li>
+        <li>Validation-set Dice (2 patients) and test-set Dice (17 patients) disagree substantially in places — e.g. E2 has the highest val-real score of any replica-arm run (0.7869) but a below-baseline test score (0.7683) — a reminder that the 2-patient validation set is too small to reliably select checkpoints or judge an idea on its own.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>Dice scores computed on the 17-patient held-out test set against manually-traced ground truth. Noise floor measured via seed42-vs-seed7 replication of the replica recipe. All numbers verified directly against saved <code>history.csv</code> training logs and 17-patient inference outputs before inclusion here.</footer>
+
+</div>
+
+</body></html>
