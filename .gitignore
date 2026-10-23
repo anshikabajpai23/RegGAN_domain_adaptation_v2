@@ -30,3 +30,9 @@ data/
 labeled_patients.txt
 *.pth
 data_external/
+
+# synthetic-tear logs: bulky samples / NIfTI stacks stay local (CSV summaries can be tracked)
+results/sim_synthetic_log/**/samples/
+results/sim_synthetic_log/**/nifti/
+results/*synthetic_log/**/samples/
+results/*synthetic_log/**/nifti/

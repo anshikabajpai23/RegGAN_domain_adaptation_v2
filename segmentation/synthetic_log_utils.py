@@ -11,7 +11,8 @@ Writes into that epoch folder:
   stats_all.csv               every synthetic sample of the epoch (merged from all workers)
   summary_per_mode.csv        per pattern: count, share, label/piece/intensity statistics
   summary_histograms.png      distributions per pattern (label change, pieces, intensities)
-  nifti/<mode>_<source>_{image_before,image_after,label_before,label_after}.nii.gz
+  summary_per_variant.csv     (v17+) the same per variant: inplace_horizontal ... inplace_complex_hv, flap ...
+  nifti/<mode>_<source>_{image_before,image_after,label_before,label_after,tear}.nii.gz   (tear: v17+)
                               the saved samples stacked along axis 0 (CENTRE slice of each
                               sample, one sample per "slice"), for scrolling in Slicer/ITK-SNAP;
                               images are int16 = intensity x 1000, labels are 0/1
@@ -23,6 +24,17 @@ import os
 import sys
 
 import numpy as np
+
+
+def load_sample(path):
+    """Read one saved synthetic sample (.npz) as a dict; images always come back as float32 in [0, 1]
+    (v15 stores float16, v17+ stores uint8 with image_scale = 255)."""
+    with np.load(path) as d:
+        out = {k: d[k] for k in d.files}
+    scale = float(out.pop("image_scale", 1))
+    for k in ("image_before", "image_after"):
+        out[k] = out[k].astype(np.float32) / scale
+    return out
 
 
 def merge_stats(epoch_dir):
@@ -60,6 +72,15 @@ def summarize(epoch_dir):
                  int_changed_after=("mean_int_changed_after", "mean")).reset_index()
     summ["share_of_all"] = summ["n"] / summ["n"].sum()
     summ.round(4).to_csv(os.path.join(epoch_dir, "summary_per_mode.csv"), index=False)
+    if "variant" in df.columns:                      # v17+: one row per variant (inplace_horizontal, ..., flap)
+        gv = df.groupby(["variant", "source"])
+        sv = gv.agg(n=("variant", "size"), label_change_px_mean=("label_change_px", "mean"),
+                    tear_px_mean=("tear_px", "mean"), pieces_after_mean=("pieces_after", "mean"),
+                    share_more_pieces=("pieces_change", lambda x: float((x > 0).mean())),
+                    int_meniscus_after=("mean_int_meniscus_after", "mean"),
+                    int_changed_after=("mean_int_changed_after", "mean")).reset_index()
+        sv["share_of_all"] = sv["n"] / sv["n"].sum()
+        sv.round(4).to_csv(os.path.join(epoch_dir, "summary_per_variant.csv"), index=False)
 
     modes = sorted(df["mode"].unique())
     cols = [("label_change_px", "label size change (px)"), ("pieces_change", "change in number of pieces"),
@@ -84,19 +105,23 @@ def build_nifti_stacks(epoch_dir):
             files = sorted(glob.glob(os.path.join(mode_dir, f"{source}_*.npz")))
             if not files:
                 continue
-            stacks = {"image_before": [], "image_after": [], "label_before": [], "label_after": []}
+            stacks = {"image_before": [], "image_after": [], "label_before": [], "label_after": [], "tear": []}
             with open(os.path.join(out, f"{mode}_{source}_index.csv"), "w", newline="") as fh:
                 w = csv.writer(fh); w.writerow(["stack_position", "file", "pid", "slice"])
                 for k, f in enumerate(files):
-                    d = np.load(f)
+                    d = load_sample(f)
                     # images stored as int16 = intensity x 1000 (0..1000) to keep downloads small
                     stacks["image_before"].append(np.round(d["image_before"][1].astype(np.float32) * 1000).astype(np.int16))
                     stacks["image_after"].append(np.round(d["image_after"][1].astype(np.float32) * 1000).astype(np.int16))
                     stacks["label_before"].append((d["mask_before"] > 0).astype(np.int16))
                     stacks["label_after"].append((d["mask_after"] > 0).astype(np.int16))
+                    if "tear" in d:                     # v17+ logs store the tear map
+                        stacks["tear"].append((d["tear"] > 0).astype(np.int16))
                     w.writerow([k, os.path.relpath(f, epoch_dir), str(d["pid"]), int(d["slice"])])
             aff = np.diag([1.0, 0.39, 0.39, 1.0])
             for name, arr in stacks.items():
+                if not arr:
+                    continue
                 nib.save(nib.Nifti1Image(np.stack(arr, 0), aff), os.path.join(out, f"{mode}_{source}_{name}.nii.gz"))
     print(f"NIfTI stacks -> {out}")
 

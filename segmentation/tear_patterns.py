@@ -223,22 +223,40 @@ def _mode_bucket(img, mask, comp, others, cls, rng):
 
 # ───────────────────────────── entry point ─────────────────────────────
 
-def synth_pattern(image, mask, rng, p=0.5, modes=MODES, mode_p=MODE_P, neighbor_p=0.6):
+def synth_pattern(image, mask, rng, p=0.5, modes=MODES, mode_p=MODE_P, neighbor_p=0.6,
+                  inplace_variants=None, inplace_p=None, return_info=False):
     """
     image: (3, H, W) float32 in [0, 1] (slices i-1, i, i+1); mask: (H, W) int (0 bg, >0 meniscus).
     Returns (image_out, mask_out, mode). With probability 1 - p, or if there is no meniscus,
     returns the inputs unchanged and mode "none". mask_out follows the label rule above.
+
+    v17 / v16 / v18 options (defaults = v15 behaviour, same random draws):
+      inplace_variants / inplace_p: in-horn variants for "inplace" (e.g. tear_synth.PATTERNS_V17,
+          which adds Fig. 10a "complex_hv"); None = tear_synth's PATTERNS / PATTERN_P.
+      return_info: also return a dict {"variant": e.g. "inplace_complex_hv" or "flap",
+          "variant_all": every in-horn variant painted, joined by "+", "tear": bool (H, W) tear map}.
+          Tear map = painted signal for inplace, otherwise every pixel whose label changed
+          (removed tissue, added outline / lobe, the gap AND the displaced piece for flap / bucket).
     """
     mode_p = np.asarray(mode_p, float) / np.sum(mode_p)
+
+    def done(img, msk, mode, variant="none", variant_all="", tear=None):
+        if not return_info:
+            return img, msk, mode
+        if tear is None:
+            tear = (np.asarray(msk) > 0) != (np.asarray(mask) > 0)
+        return img, msk, mode, {"variant": variant, "variant_all": variant_all, "tear": tear}
+
     if rng.random() >= p or (mask > 0).sum() < MIN_HORN_PX:
-        return image, mask, "none"
+        return done(image, mask, "none")
     horns = _horns(mask > 0)
     if not horns:
-        return image, mask, "none"
+        return done(image, mask, "none")
     mode = str(rng.choice(modes, p=mode_p))
     if mode == "inplace":
-        img, _, pats = synth_tear(image, mask, rng, p=1.0, neighbor_p=neighbor_p)
-        return img, mask, "inplace"
+        img, tear, pats = synth_tear(image, mask, rng, p=1.0, neighbor_p=neighbor_p,
+                                     variants=inplace_variants, variant_p=inplace_p)
+        return done(img, mask, "inplace", f"inplace_{pats[0]}" if pats else "inplace_none", "+".join(pats), tear)
     k = int(rng.integers(len(horns)))
     comp = horns[k]
     others = [h for j, h in enumerate(horns) if j != k]
@@ -256,4 +274,4 @@ def synth_pattern(image, mask, rng, p=0.5, modes=MODES, mode_p=MODE_P, neighbor_
         img, msk = _mode_flap(img, msk, comp, cls, rng)
     elif mode == "bucket":
         img, msk = _mode_bucket(img, msk, comp, others, cls, rng)
-    return img.astype(np.float32), msk, mode
+    return done(img.astype(np.float32), msk, mode, mode, mode)

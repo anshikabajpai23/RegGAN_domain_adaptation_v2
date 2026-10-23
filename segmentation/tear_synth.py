@@ -31,6 +31,11 @@ from scipy import ndimage as ndi
 
 PATTERNS = ("horizontal", "vertical", "oblique", "radial", "complex", "maceration")
 PATTERN_P = (0.25, 0.20, 0.20, 0.10, 0.10, 0.15)
+# v17 / v16 / v18 (opt-in; v15 keeps the two lines above): adds "complex_hv" = horizontal + vertical
+# (longitudinal) cleft in the same horn, radsource.us/meniscal-tear-patterns Fig. 10a. The complex share
+# rises from 0.10 to 0.18 (split 0.08 / 0.10), taken evenly from horizontal / vertical / oblique.
+PATTERNS_V17 = ("horizontal", "vertical", "oblique", "radial", "complex", "complex_hv", "maceration")
+PATTERN_P_V17 = (0.22, 0.18, 0.18, 0.10, 0.08, 0.10, 0.14)
 MIN_HORN_PX = 20
 ALPHA_CLEFT = (0.25, 0.8)
 ALPHA_MACERATION = (0.2, 0.6)
@@ -108,8 +113,11 @@ def _maceration(comp, rng):
 
 # [EXPLAIN] Pick a tear pattern for ONE horn (anterior or posterior piece of the meniscus) with the probabilities in
 # [EXPLAIN] PATTERN_P, then build it as a boolean mask that always lies inside the horn.
-def _horn_tear(comp, rng):
-    pat = PATTERNS[rng.choice(len(PATTERNS), p=PATTERN_P)]
+def _horn_tear(comp, rng, patterns=None, pattern_p=None):
+    # None = the module-level PATTERNS / PATTERN_P (v14 / v15 behaviour, read at call time)
+    patterns = PATTERNS if patterns is None else patterns
+    pattern_p = PATTERN_P if pattern_p is None else pattern_p
+    pat = patterns[rng.choice(len(patterns), p=pattern_p)]
     if pat == "horizontal":
         return _cleft(comp, rng.uniform(-15, 15), rng.random() < 0.3, rng), pat
     if pat == "vertical":
@@ -122,19 +130,24 @@ def _horn_tear(comp, rng):
         a = _cleft(comp, rng.uniform(-15, 15), rng.random() < 0.3, rng)
         b = _cleft(comp, rng.choice([-1, 1]) * rng.uniform(30, 60), rng.random() < 0.3, rng)
         return a | b, pat
+    if pat == "complex_hv":                    # Fig. 10a: horizontal + vertical (longitudinal) components
+        a = _cleft(comp, rng.uniform(-15, 15), rng.random() < 0.3, rng)
+        b = _cleft(comp, 90 + rng.uniform(-15, 15), rng.random() < 0.3, rng)
+        return a | b, pat
     return _maceration(comp, rng), pat
 
 
 # [EXPLAIN] MAIN ENTRY. Input: the 3-slice image and the mask. Output: image with a bright tear painted inside the
 # [EXPLAIN] meniscus, the tear mask, and the pattern names. With probability 1-p (or if there is no meniscus) nothing
 # [EXPLAIN] changes, so some training slices stay healthy. The caller never changes the label.
-def synth_tear(image, mask, rng, p=0.5, neighbor_p=0.6):
+def synth_tear(image, mask, rng, p=0.5, neighbor_p=0.6, variants=None, variant_p=None):
     """
     image: (3, H, W) float32 in [0, 1], channel 1 = centre slice.
     mask:  (H, W) int, 0 = background, >0 = meniscus.
     Returns (image_out, tear, patterns): tear is a bool (H, W) mask, always a
     subset of mask > 0; patterns lists the pattern used per painted horn.
     With probability 1 - p, or if there is no meniscus, the image is returned unchanged.
+    variants / variant_p: in-horn variants to draw from (None = PATTERNS / PATTERN_P; v17 passes the _V17 ones).
     """
     mask_bin = mask > 0
     tear = np.zeros(mask_bin.shape, dtype=bool)
@@ -149,7 +162,7 @@ def synth_tear(image, mask, rng, p=0.5, neighbor_p=0.6):
     n_paint = 1 if (len(horns) == 1 or rng.random() < 0.6) else len(horns)
     patterns = []
     for k in order[:n_paint]:
-        t, pat = _horn_tear(horns[k], rng)
+        t, pat = _horn_tear(horns[k], rng, variants, variant_p)
         tear |= t
         patterns.append(pat)
     # [EXPLAIN] Safety: a tear can never leave the meniscus, so the outer boundary is never altered.
